@@ -1,0 +1,2759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bird Preview</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #cfe8f0;
+    overflow: hidden;
+    font-family: sans-serif;
+  }
+  #scene {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+  #branch {
+    position: absolute;
+    width: 495px;
+    height: auto;
+    pointer-events: none;
+    z-index: 1;
+  }
+  #foliage {
+    position: absolute;
+    pointer-events: none;
+    z-index: 2;
+  }
+  #foliage img {
+    position: absolute;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  #foliage .leaf {
+    width: 39.84375px;
+    height: auto;
+    /* transform-origin set per-leaf in JS: a bottom corner, not bottom-center,
+       so the leaf fans out diagonally across its pivot instead of straight up */
+  }
+  #foliage .flower {
+    width: 36px;
+    height: auto;
+    transform-origin: 50% 50%; /* center of the flower pins to the branch */
+  }
+  .petal {
+    position: absolute;
+    width: 22px;
+    height: auto;
+    pointer-events: none;
+    z-index: 50;
+  }
+  #growthControl {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(255,255,255,0.85);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #333;
+    z-index: 100;
+  }
+  #growthControl input {
+    width: 160px;
+    vertical-align: middle;
+  }
+  #birdRoot {
+    position: absolute;
+    width: 400px;
+    height: 400px;
+    transform-origin: 50% 50%;
+    will-change: transform;
+    z-index: 10; /* always in front of the branch, foliage, and petals */
+  }
+  #birdRoot img {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+  #legsL, #legsR { z-index: 1; }
+  #wingR { z-index: 2; }
+  #body { z-index: 3; }
+  #eyes { z-index: 4; }
+  #wingL { z-index: 5; }
+  #legsL { clip-path: inset(0 50% 0 0); }
+  #legsR { clip-path: inset(0 0 0 50%); }
+
+  /* Explicit stacking for the egg scenes: the flying/opening top shell must
+     always render above the bottom shell and body, in every direction it
+     travels — otherwise it can pass behind them mid-throw and appear to
+     vanish before its actual fade-out. */
+  #eggshellBack1, #eggshellBack2   { z-index: 1; }
+  #birdInShell1,  #birdInShell2    { z-index: 2; }
+  #eggshellBottom1, #eggshellBottom2 { z-index: 3; }
+  #eggshellTopPivot1, #eggshellTopPivot2 { z-index: 10; }
+
+  /* Stage 4 draw order, mirroring the Godot scene tree's child order (later =
+     drawn on top). Legs start above everything (z 8) then get moved to z:2,
+     behind the body, the instant they "grow" — matching the Godot script's
+     explicit move_child(..., Body.get_index()) reordering. */
+  #backShell4 { z-index: 1; }
+  #leftBackShellPivot4, #rightBackShellPivot4 { z-index: 2; }
+  #body4 { z-index: 3; }
+  #eyes4 { z-index: 4; }
+  #frontShell4 { z-index: 5; }
+  #leftFrontShellPivot4, #rightFrontShellPivot4 { z-index: 6; }
+  #middleShell4 { z-index: 7; }
+  #leftLeg4, #rightLeg4 { z-index: 8; }
+
+  /* All Process mode: each scene gets an explicit z-index so it becomes its
+     own stacking context — otherwise its internal children's z-index values
+     (1-10ish) could leak out and compare directly against the platform/glow
+     layers below, instead of staying contained as one unit. */
+  #scene, #eggScene0, #eggScene1, #eggScene2, #eggScene3, #eggScene4 { z-index: 5; }
+  #stagePlatform {
+    display: none;
+    position: absolute;
+    left: 50%;
+    top: 88%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    width: 160px;
+    z-index: 2; /* behind every scene */
+    opacity: 1;
+    transition: opacity 0.8s ease;
+  }
+
+  #glowBack, #glowFront, #glowExtra {
+    display: block;
+    position: absolute;
+    left: 50%;
+    top: 88%;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.35);
+    transition: transform 0.5s ease, opacity 0.5s ease;
+  }
+  #glowBack      { width: 140px; z-index: 4; }   /* behind the bird, in front of the platform */
+  #glowFront     { width: 140px; z-index: 6; }   /* in front of the bird */
+
+  #glowExtra {
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.22) 45%, rgba(255,255,255,0) 75%);
+    z-index: 7; /* in front of glowFront and the bird */
+    mix-blend-mode: screen;
+  }
+
+  #processHud {
+    display: none;
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    background: rgba(255,255,255,0.9);
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    color: #333;
+    z-index: 100;
+    text-align: left;
+  }
+  #processHud input { width: 220px; vertical-align: middle; }
+
+  #hud {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: rgba(255,255,255,0.85);
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #333;
+    z-index: 100;
+  }
+  #hud button {
+    margin-top: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<div id="stageToggle" style="position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:200; background:rgba(255,255,255,0.9); padding:6px 10px; border-radius:8px;">
+  <button onclick="showStage('egg0')" id="btnEgg0">Egg Stage 0</button>
+  <button onclick="showStage('adult')" id="btnAdult">Adult Bird</button>
+  <button onclick="showStage('egg1')" id="btnEgg1">Egg Stage 1</button>
+  <button onclick="showStage('egg2')" id="btnEgg2">Egg Stage 2</button>
+  <button onclick="showStage('egg3')" id="btnEgg3">Egg Stage 3</button>
+  <button onclick="showStage('egg4')" id="btnEgg4">Egg Stage 4</button>
+  <button onclick="enterAllProcess()" id="btnAllProcess">All Process</button>
+</div>
+
+<img id="stagePlatform" src="bird/stage.png" alt="">
+<img id="glowBack" src="bird/back.png" alt="">
+<img id="glowFront" src="bird/front.png" alt="">
+<div id="glowExtra"></div>
+
+<div id="processHud">
+  <button onclick="prevProcessStage()">&larr; Previous stage</button>
+  <span id="processStageLabel" style="margin:0 8px; font-weight:bold;"></span>
+  <button onclick="nextProcessStage()">Next stage &rarr;</button>
+  <br>
+  <span id="processProgressLabel">Transition</span>
+  <input type="range" id="processProgressSlider" min="0" max="100" value="0" oninput="onProcessProgress(this.value)">
+  <br>
+  <button onclick="exitAllProcess()">Exit All Process</button>
+</div>
+
+<div id="scene">
+  <img id="branch" src="bird/treebranch_0.png" alt="" onerror="this.style.display='none'">
+  <div id="foliage"></div>
+  <div id="birdRoot">
+    <img id="body">
+    <img id="legsL">
+    <img id="legsR">
+    <img id="wingL">
+    <img id="wingR">
+    <img id="eyes">
+  </div>
+  <div id="hud">
+    Bird preview — direction/state auto-cycles, random flights + expressions.<br>
+    <span id="status">still · dir 0</span><br>
+    <button onclick="forceFly()">Fly circle</button>
+    <button onclick="forceFlyToBranch()">Fly to branch</button>
+    <button onclick="forceExpression()">Force expression</button>
+    <button id="calibBtn" onclick="toggleCalibration()">Calibrate positions</button>
+    <div id="calibControls" style="display:none; margin-top:6px;">
+      Dir:
+      <select id="calibDirSelect" onchange="calibSetPose()">
+        <option value="0">0</option><option value="45">45</option><option value="90">90</option>
+        <option value="135">135</option><option value="180">180</option><option value="225">225</option>
+        <option value="270">270</option><option value="315">315</option>
+      </select>
+      <label><input type="radio" name="calibState" value="still" checked onchange="calibSetPose()"> still</label>
+      <label><input type="radio" name="calibState" value="fly" onchange="calibSetPose()"> fly</label>
+    </div>
+    <div id="calibReadout" style="display:none; margin-top:4px; font-weight:bold;">Drag wingL / wingR / eyes</div>
+  </div>
+  <div id="growthControl">
+    Branch growth<br>
+    <input type="range" id="growthSlider" min="0" max="100" value="0" oninput="setGrowth(this.value)">
+  </div>
+</div>
+
+<div id="eggScene0" style="display:none; position:relative; width:100%; height:100%;">
+  <div id="dock0" style="position:absolute; left:50%; top:55%;">
+    <div id="pivot0" style="position:absolute; left:50%; top:50%; transform-origin:0px 156.5px;">
+      <img id="egg0" style="position:absolute; left:50%; top:50%;">
+    </div>
+  </div>
+  <div id="eggHud0" style="position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.85); padding:8px 12px; border-radius:8px; font-size:13px; color:#333;">
+    Egg — Stage 0 (idle egg, shakes faster as you drag).<br>
+    <span id="eggStatus0">idle</span><br>
+    Shake speed<br>
+    <input type="range" id="egg0SpeedSlider" min="0" max="100" value="0" oninput="setEgg0Speed(this.value)" style="width:160px; vertical-align:middle;">
+  </div>
+</div>
+
+<div id="eggScene1" style="display:none; position:relative; width:100%; height:100%;">
+  <div id="dock1" style="position:absolute; left:50%; top:55%;">
+    <div id="eggPivot1" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+      <img id="eggshellBack1"  style="position:absolute; left:50%; top:50%;">
+      <div id="birdInShell1" style="position:absolute; left:50%; top:50%;">
+        <img id="birdBody1" style="position:absolute; left:50%; top:50%;">
+        <img id="eggEyes1"  style="position:absolute; left:50%; top:50%;">
+      </div>
+      <div id="eggshellTopPivot1" style="position:absolute; left:50%; top:50%; transform-origin:0px 176px;">
+        <img id="eggshellTop1" style="position:absolute; left:50%; top:50%;">
+      </div>
+      <img id="eggshellBottom1" style="position:absolute; left:50%; top:50%;">
+    </div>
+  </div>
+  <div id="eggHud1" style="position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.85); padding:8px 12px; border-radius:8px; font-size:13px; color:#333;">
+    Egg — Stage 1 (peek, no hands).<br>
+    <span id="eggStatus1">idle</span><br>
+    <button onclick="playEgg1Hatch()">Play hatch animation</button>
+    <button id="eggCalibBtn1" onclick="toggleEggCalibration('egg1')">Calibrate positions</button>
+    <div id="eggCalibReadout1" style="display:none; margin-top:4px; font-weight:bold;">Drag a part</div>
+  </div>
+</div>
+
+<div id="eggScene2" style="display:none; position:relative; width:100%; height:100%;">
+  <div id="dock2" style="position:absolute; left:50%; top:55%;">
+    <div id="eggPivot2" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+      <img id="eggshellBack2"  style="position:absolute; left:50%; top:50%;">
+      <div id="birdInShell2" style="position:absolute; left:50%; top:50%;">
+        <img id="birdBody2" style="position:absolute; left:50%; top:50%;">
+        <img id="eggEyes2"  style="position:absolute; left:50%; top:50%;">
+        <img id="handL2"    style="position:absolute; left:50%; top:50%;">
+        <img id="handR2"    style="position:absolute; left:50%; top:50%;">
+      </div>
+      <div id="eggshellTopPivot2" style="position:absolute; left:50%; top:50%; transform-origin:233px 176px;">
+        <img id="eggshellTop2" style="position:absolute; left:50%; top:50%;">
+      </div>
+      <img id="eggshellBottom2" style="position:absolute; left:50%; top:50%;">
+    </div>
+  </div>
+  <div id="eggHud2" style="position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.85); padding:8px 12px; border-radius:8px; font-size:13px; color:#333;">
+    Egg — Stage 2 (hands, shell detaches).<br>
+    <span id="eggStatus2">idle</span><br>
+    <button onclick="playEgg2Hatch()">Play hatch animation</button>
+    <button id="egg2PauseBtn" onclick="toggleEgg2Pause()">Pause</button>
+    <button id="eggCalibBtn2" onclick="toggleEggCalibration('egg2')">Calibrate positions</button>
+    <div id="eggCalibReadout2" style="display:none; margin-top:4px; font-weight:bold;">Drag a part</div>
+  </div>
+</div>
+
+<div id="eggScene3" style="display:none; position:relative; width:100%; height:100%;">
+  <div id="dock3" style="position:absolute; left:50%; top:55%;">
+    <div id="pivot3" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+      <div id="body3" style="position:absolute; left:50%; top:50%;">
+        <img id="bodyImg3" style="position:absolute; left:50%; top:50%;">
+        <img id="eyes3" style="position:absolute; left:50%; top:50%;">
+      </div>
+      <div id="rightWingPivot3" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+        <img id="rightWing3" style="position:absolute; left:50%; top:50%;">
+      </div>
+      <div id="leftWingPivot3" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+        <img id="leftWing3" style="position:absolute; left:50%; top:50%;">
+      </div>
+      <img id="shell3" style="position:absolute; left:50%; top:50%;">
+      <img id="leftLegHole3" style="position:absolute; left:50%; top:50%;">
+      <img id="rightLegHole3" style="position:absolute; left:50%; top:50%;">
+      <div id="leftLegPivot3" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+        <img id="leftLeg3" style="position:absolute; left:50%; top:50%;">
+      </div>
+      <div id="rightLegPivot3" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+        <img id="rightLeg3" style="position:absolute; left:50%; top:50%;">
+      </div>
+    </div>
+  </div>
+  <div id="eggHud3" style="position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.85); padding:8px 12px; border-radius:8px; font-size:13px; color:#333;">
+    Egg — Stage 3 (legs crack out, wings/legs move).<br>
+    <span id="eggStatus3">idle</span><br>
+    <button onclick="playEgg3Hatch()">Play hatch animation</button>
+    <button id="egg3PauseBtn" onclick="toggleEgg3Pause()">Pause</button>
+    <button id="eggCalibBtn3" onclick="toggleEggCalibration('egg3')">Calibrate positions</button>
+    <div id="eggCalibReadout3" style="display:none; margin-top:4px; font-weight:bold;">Drag a part</div>
+  </div>
+</div>
+
+<div id="eggScene4" style="display:none; position:relative; width:100%; height:100%;">
+  <div id="dock4" style="position:absolute; left:50%; top:55%;">
+    <div id="pivot4" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+      <img id="backShell4" style="position:absolute; left:50%; top:50%;">
+      <div id="leftBackShellPivot4" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+        <img id="leftBackShell4" style="position:absolute; left:50%; top:50%;">
+      </div>
+      <div id="rightBackShellPivot4" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+        <img id="rightBackShell4" style="position:absolute; left:50%; top:50%;">
+      </div>
+      <img id="body4" style="position:absolute; left:50%; top:50%;">
+      <img id="eyes4" style="position:absolute; left:50%; top:50%;">
+      <img id="frontShell4" style="position:absolute; left:50%; top:50%;">
+      <div id="leftFrontShellPivot4" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+        <img id="leftFrontShell4" style="position:absolute; left:50%; top:50%;">
+      </div>
+      <div id="rightFrontShellPivot4" style="position:absolute; left:50%; top:50%; transform-origin:50% 50%;">
+        <img id="rightFrontShell4" style="position:absolute; left:50%; top:50%;">
+      </div>
+      <img id="middleShell4" style="position:absolute; left:50%; top:50%;">
+      <img id="leftLeg4" style="position:absolute; left:50%; top:50%;">
+      <img id="rightLeg4" style="position:absolute; left:50%; top:50%;">
+    </div>
+  </div>
+  <div id="eggHud4" style="position:absolute; top:10px; left:10px; background:rgba(255,255,255,0.85); padding:8px 12px; border-radius:8px; font-size:13px; color:#333;">
+    Egg — Stage 4 (shell cracks, falls, legs raise).<br>
+    <span id="eggStatus4">idle</span><br>
+    <button onclick="playEgg4Hatch()">Play hatch animation</button>
+    <button id="egg4PauseBtn" onclick="toggleEgg4Pause()">Pause</button>
+    <button id="eggCalibBtn4" onclick="toggleEggCalibration('egg4')">Calibrate positions</button>
+    <div id="eggCalibReadout4" style="display:none; margin-top:4px; font-weight:bold;">Drag a part</div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   ASSET PATHS — matches the current project's actual filenames
+   ============================================================ */
+const BASE = "bird/";
+
+const DIRS = ["0","45","90","135","180","225","270","315"];
+const FLAP_DIRS = ["45","90","270","315"];          // real 12-frame flap animations
+const TRANSITION_DIRS = ["0","135","180","225"];     // single-frame "pass-through" pose while flying
+
+// Still-state positions (relative to bird root center)
+const STILL_POS = {
+  "0":   {wingL:[157,72],   wingR:[-157,72], eyes:[0,50],     legs:[6,221]},
+  "45":  {wingL:[91,58],    wingR:null,      eyes:[-109,-9],  legs:[-37,209]},
+  "90":  {wingL:[60,60],    wingR:null,      eyes:[-109,0],   legs:[0,217]},
+  "135": {wingL:[-134,63],  wingR:[162,52],  eyes:null,       legs:[-10,217]},
+  "180": {wingL:[-154,70],  wingR:[161,73],  eyes:null,       legs:[8,200]},
+  "225": {wingL:[-166,53],  wingR:[141,42],  eyes:null,       legs:[27,210]},
+  "270": {wingL:null,       wingR:[-16,54],  eyes:[109,-9],   legs:[23,214]},
+  "315": {wingL:null,       wingR:[-79,66],  eyes:[108,-11],  legs:[23,198]},
+};
+
+const FLY_POS = {
+  "0":   {wingL:[218,-12],  wingR:[-217,-9],  eyes:[0,50],     legs:[11,215]},
+  "45":  {wingL:[18,97],    wingR:[76,155],   eyes:[-109,-9],  legs:[47,221]},
+  "90":  {wingL:[56,-9],    wingR:[35,-26],   eyes:[-109,0],   legs:[66,218]},
+  "135": {wingL:[-219,-35], wingR:[211,-18],  eyes:null,       legs:[28,224]},
+  "180": {wingL:[-212,-7],  wingR:[212,-7],   eyes:null,       legs:[9,206]},
+  "225": {wingL:[-232,-19], wingR:[223,-21],  eyes:null,       legs:[-14,225]},
+  "270": {wingL:[-68,-78],  wingR:[-97,-36],  eyes:[109,-9],   legs:[-47,229]},
+  "315": {wingL:[-48,125],  wingR:[-7,75],    eyes:[108,-11],  legs:[-22,222]},
+};
+
+function eyeWord(dir){
+  switch(dir){
+    case "0": return "front_0";
+    case "45": return "45";
+    case "315": return "315";
+    case "90": return "left";
+    case "270": return "right";
+    default: return "front_0";
+  }
+}
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let currentDirection = "0";
+let isFlying = false;
+let isBlinking = false;
+let isExpressing = false;
+
+const bodyEl  = document.getElementById("body");
+const legsLEl = document.getElementById("legsL");
+const legsREl = document.getElementById("legsR");
+const wingLEl = document.getElementById("wingL");
+const wingREl = document.getElementById("wingR");
+const eyesEl  = document.getElementById("eyes");
+const rootEl  = document.getElementById("birdRoot");
+const statusEl = document.getElementById("status");
+
+const BIRD_SCALE = 0.25; // shrink the whole rig to 25% size
+// transform-origin is 50% 50%, so scale() pivots around the box's center —
+// the center point stays at left+200/top+200 regardless of scale factor.
+const BIRD_HALF = 200;
+
+let currentBobDeg = 0;
+let currentFloatY = 0;
+
+function applyRootTransform(){
+  rootEl.style.transform = `scale(${BIRD_SCALE}) translateY(${currentFloatY}px) rotate(${currentBobDeg}deg)`;
+}
+
+function rootRotation(deg){
+  currentBobDeg = deg;
+  applyRootTransform();
+}
+
+/* ============================================================
+   FLOATING HOVER — continuous gentle up/down drift while flying,
+   layered underneath the flap-triggered bob (which handles rotation)
+   ============================================================ */
+let floatAnimId = null;
+const FLOAT_AMPLITUDE_PX = 6;
+const FLOAT_PERIOD_MS = 900;
+
+function floatTick(timestamp){
+  currentFloatY = Math.sin((timestamp / FLOAT_PERIOD_MS) * Math.PI * 2) * FLOAT_AMPLITUDE_PX;
+  applyRootTransform();
+  floatAnimId = requestAnimationFrame(floatTick);
+}
+
+function startFloat(){
+  if (floatAnimId) return;
+  floatAnimId = requestAnimationFrame(floatTick);
+}
+
+function stopFloat(){
+  if (floatAnimId){ cancelAnimationFrame(floatAnimId); floatAnimId = null; }
+  currentFloatY = 0;
+  applyRootTransform();
+}
+
+let wingLFrames = [];
+let wingRFrames = [];
+let wingFrameIndex = 0;
+let wingFrameTimer = null;
+const WING_FPS = 10; // matches ~10fps flap speed used in the Godot build
+
+function frameList(prefix, dir, count){
+  const arr = [];
+  for (let i = 0; i < count; i++) arr.push(`${BASE}${prefix}_${dir}_${i}.png`);
+  return arr;
+}
+
+function setPos(el, xy){
+  if (!xy){ el.style.display = "none"; return; }
+  el.style.display = "block";
+  el.style.transform = `translate(-50%, -50%) translate(${xy[0]}px, ${xy[1]}px)`;
+}
+
+// Legs are split into left/right halves (via CSS clip-path) of the same sprite so
+// each side can lift independently for the happy shake while looking identical
+// to a single image the rest of the time (liftL/liftR default to 0).
+let currentLegsXY = null;
+function setLegsPos(xy, liftL, liftR){
+  currentLegsXY = xy;
+  liftL = liftL || 0; liftR = liftR || 0;
+  if (!xy){ legsLEl.style.display = "none"; legsREl.style.display = "none"; return; }
+  legsLEl.style.display = "block"; legsREl.style.display = "block";
+  legsLEl.style.transform = `translate(-50%, -50%) translate(${xy[0]}px, ${xy[1] + liftL}px)`;
+  legsREl.style.transform = `translate(-50%, -50%) translate(${xy[0]}px, ${xy[1] + liftR}px)`;
+}
+
+function stopWingAnim(){
+  if (wingFrameTimer) { clearInterval(wingFrameTimer); wingFrameTimer = null; }
+}
+
+function playWingFlap(dir){
+  stopWingAnim();
+  wingLFrames = frameList("wing_left/wing_left_fly", dir, 12);
+  wingRFrames = frameList("wing_right/wing_right_fly", dir, 12);
+  wingFrameIndex = 0;
+  wingLEl.src = wingLFrames[0];
+  wingREl.src = wingRFrames[0];
+  wingFrameTimer = setInterval(() => {
+    wingFrameIndex = (wingFrameIndex + 1) % 12;
+    wingLEl.src = wingLFrames[wingFrameIndex];
+    wingREl.src = wingRFrames[wingFrameIndex];
+    if (wingFrameIndex === 5) triggerBob(dir);
+  }, 1000 / WING_FPS);
+}
+
+function playWingTransition(dir){
+  // brief single-frame pose while passing through a non-flap direction mid-flight
+  stopWingAnim();
+  wingLEl.src = `${BASE}wing_left/wing_left_fly_${dir}_0.png`;
+  wingREl.src = `${BASE}wing_right/wing_right_fly_${dir}_0.png`;
+}
+
+function playWingStill(dir){
+  stopWingAnim();
+  wingLEl.src = `${BASE}wing_left/wing_left_still_${dir}.png`;
+  wingREl.src = `${BASE}wing_right/wing_right_still_${dir}_0.png`;
+}
+
+/* ============================================================
+   BOBBING — snaps up then gently settles, triggered on flap frame 5,
+   mirrored (anticlockwise) for 270/315
+   ============================================================ */
+function triggerBob(dir){
+  const peak = (dir === "270" || dir === "315") ? -4 : 4;
+  rootEl.style.transition = "transform 0.12s ease-out";
+  rootRotation(peak);
+  setTimeout(() => {
+    rootEl.style.transition = "transform 0.45s ease-out";
+    rootRotation(0);
+  }, 120);
+}
+
+// Per-calibration: at these facings (225/270/315) wingR crosses in front of the
+// body instead of behind it; while flying at those facings, wingL also crosses
+// behind the body instead of in front. Default (front L / behind R) covers every
+// other direction. Overrides #wingL/#wingR's static CSS z-index per direction.
+const WING_CROSS_DIRS = ["225", "270", "315"];
+function setWingLayering(dir, flying){
+  if (WING_CROSS_DIRS.includes(dir)){
+    wingREl.style.zIndex = 6; // in front of the body
+    wingLEl.style.zIndex = flying ? 1 : 5; // behind the body only while flying
+  } else {
+    wingREl.style.zIndex = 2; // default: behind the body
+    wingLEl.style.zIndex = 5; // default: in front of the body
+  }
+}
+
+/* ============================================================
+   CORE: set direction + state, mirrors Godot's set_direction()
+   ============================================================ */
+function setDirection(dir, flying){
+  currentDirection = dir;
+  isFlying = flying;
+
+  bodyEl.src = `${BASE}body/body_${dir}.png`;
+
+  const table = flying ? FLY_POS : STILL_POS;
+  const p = table[dir];
+
+  setPos(wingLEl, p.wingL);
+  setPos(wingREl, p.wingR);
+  setPos(eyesEl, p.eyes);
+  setLegsPos(p.legs);
+  setWingLayering(dir, flying);
+
+  if (flying){
+    const legsSrc = `${BASE}legs_fly/leg_fly_${dir}.png`;
+    legsLEl.src = legsSrc; legsREl.src = legsSrc;
+    if (FLAP_DIRS.includes(dir)){
+      playWingFlap(dir);
+    } else {
+      playWingTransition(dir);
+    }
+    startFloat();
+  } else {
+    const legsSrc = `${BASE}legs_still/legs_still_${dir}.png`;
+    legsLEl.src = legsSrc; legsREl.src = legsSrc;
+    playWingStill(dir);
+    stopBobReset();
+    stopFloat();
+  }
+
+  updateEyesIdle();
+  statusEl.textContent = `${flying ? "flying" : "still"} · dir ${dir}`;
+}
+
+function stopBobReset(){
+  rootEl.style.transition = "transform 0.3s ease-out";
+  rootRotation(0);
+}
+
+/* ============================================================
+   HAPPY SHAKE — lifts one leg at a time, left then right (no body
+   tilt/rotation — that wobble was removed; only the legs' own
+   offset changes now). Eyes are set to the happy sprite by the
+   caller before this runs.
+   ============================================================ */
+const HAPPY_LEG_LIFT_PX = 10;
+
+async function rockHappy(){
+  const legsXY = currentLegsXY;
+  const seq = ["L", "R", "L", "R", null];
+  for (const lift of seq){
+    legsLEl.style.transition = "transform 0.18s ease-in-out";
+    legsREl.style.transition = "transform 0.18s ease-in-out";
+    setLegsPos(legsXY, lift === "L" ? -HAPPY_LEG_LIFT_PX : 0, lift === "R" ? -HAPPY_LEG_LIFT_PX : 0);
+    await sleep(180);
+  }
+  await sleep(300);
+}
+
+/* ============================================================
+   EYES: front-only blink + expression, static image elsewhere
+   ============================================================ */
+function updateEyesIdle(){
+  if (currentDirection !== "0"){
+    eyesEl.src = `${BASE}eyes/eye_normal_${eyeWord(currentDirection)}.png`;
+    return;
+  }
+  if (!isBlinking && !isExpressing){
+    eyesEl.src = `${BASE}eyes/eye_normal_front_0.png`;
+  }
+}
+
+async function doBlink(){
+  if (currentDirection !== "0" || isExpressing) return;
+  isBlinking = true;
+  const frames = ["0","1","2","3","2","1","0"];
+  for (const f of frames){
+    if (currentDirection !== "0") break;
+    eyesEl.src = `${BASE}eyes/eye_normal_front_${f}.png`;
+    await sleep(50);
+  }
+  isBlinking = false;
+  updateEyesIdle();
+}
+
+async function doExpression(){
+  if (currentDirection !== "0" || isBlinking) return;
+  isExpressing = true;
+  const choices = ["angry","happy","sad"];
+  const choice = choices[Math.floor(Math.random()*choices.length)];
+  if (choice === "angry"){
+    eyesEl.src = `${BASE}eyes/eye_angry_front_0.png`; await sleep(300);
+    if (currentDirection === "0"){ eyesEl.src = `${BASE}eyes/eye_angry_front_1.png`; await sleep(1000); }
+  } else if (choice === "happy"){
+    eyesEl.src = `${BASE}eyes/eye_happy_front_0.png`;
+    await rockHappy();
+  } else {
+    for (let i = 0; i <= 6; i++){
+      if (currentDirection !== "0") break;
+      eyesEl.src = `${BASE}eyes/eye_sad_front_${i}.png`;
+      await sleep(150);
+    }
+  }
+  isExpressing = false;
+  updateEyesIdle();
+}
+
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+// Pausing this stops blinking, expressions, and scheduled flights from firing
+// mid-calibration and overwriting whatever position you're dragging into place.
+let animationPaused = false;
+
+async function idleLoop(){
+  while (true){
+    await sleep(5000);
+    if (!animationPaused && !isFlying) await doBlink();
+  }
+}
+async function expressionLoop(){
+  while (true){
+    await sleep(6000 + Math.random()*6000);
+    if (!animationPaused && !isFlying) await doExpression();
+  }
+}
+function forceExpression(){ if (!animationPaused && currentDirection === "0" && !isFlying) doExpression(); }
+
+/* ============================================================
+   FLIGHT ROUTES
+   ============================================================ */
+const IDLE_POS = {x: 0.5, y: 0.88};   // still state lives at the bottom of the screen
+const BRANCH_POS = {x: 0.85, y: 0.15}; // branch sits in the top-right corner
+
+const BRANCH_WIDTH_PX = 495; // must match #branch CSS width
+const BRANCH_ASPECT = 149 / 561; // treebranch_0.png intrinsic h/w
+const BRANCH_RIGHT_MARGIN_PX = -60; // pushed further right (slightly past the edge) — anchored by a fixed pixel margin instead of a screen fraction, so it doesn't fly off-screen on smaller windows
+
+function positionBranch(){
+  const branch = document.getElementById("branch");
+  const left = window.innerWidth - BRANCH_WIDTH_PX - BRANCH_RIGHT_MARGIN_PX;
+  const top  = window.innerHeight * BRANCH_POS.y;
+  branch.style.left = left + "px";
+  branch.style.top  = top + "px";
+
+  const foliage = document.getElementById("foliage");
+  foliage.style.left = left + "px";
+  foliage.style.top  = top + "px";
+  foliage.style.width  = BRANCH_WIDTH_PX + "px";
+  foliage.style.height = (BRANCH_WIDTH_PX * BRANCH_ASPECT) + "px";
+}
+
+/* ============================================================
+   FOLIAGE — leaves then flowers grow directly out of the brown
+   branch pixels, pinned by sampling the branch PNG's alpha channel
+   ============================================================ */
+// Columns sampled every 10px across treebranch_0.png (561x149): [x, topY, bottomY]
+// of the opaque (brown) region in that column. Used to place leaf/flower pivots
+// exactly on the branch instead of guessing coordinates.
+const BRANCH_CENTERLINE = [
+  [0,124,124],[10,123,124],[20,121,124],[30,119,124],[40,118,124],[50,117,124],
+  [60,115,124],[70,114,124],[80,113,124],[90,112,124],[100,111,124],[110,111,124],
+  [120,112,126],[130,113,128],[140,114,130],[150,115,132],[160,117,134],[170,118,136],
+  [180,119,138],[190,121,140],[200,122,142],[210,124,144],[220,119,146],[230,108,147],
+  [240,98,138],[250,88,129],[260,79,120],[270,70,112],[280,63,103],[290,61,97],
+  [300,60,96],[310,60,95],[320,59,95],[330,59,95],[340,58,95],[350,58,95],
+  [360,58,96],[370,58,96],[380,57,96],[390,57,97],[400,53,97],[410,53,97],
+  [420,48,96],[430,44,93],[440,40,91],[450,36,88],[460,31,85],[470,27,82],
+  [480,23,79],[490,19,76],[500,15,73],[510,10,70],[520,6,67],[530,2,64],
+  [540,0,61],[550,8,59],[560,38,47],
+];
+
+function branchLocalAt(x){
+  let i = Math.floor(x / 10);
+  i = Math.max(0, Math.min(BRANCH_CENTERLINE.length - 2, i));
+  const [x0,t0,b0] = BRANCH_CENTERLINE[i];
+  const [x1,t1,b1] = BRANCH_CENTERLINE[i+1];
+  const t = x1 === x0 ? 0 : (x - x0) / (x1 - x0);
+  return { top: t0 + (t1 - t0) * t, bot: b0 + (b1 - b0) * t };
+}
+
+function distributeSchedule(count, rangeStart, rangeEnd, duration){
+  const span = Math.max(0, (rangeEnd - rangeStart) - duration);
+  const starts = [];
+  for (let i = 0; i < count; i++){
+    const base = rangeStart + span * (count === 1 ? 0 : i / (count - 1));
+    const jittered = base + (Math.random() * 4 - 2); // small jitter so growth doesn't look robotic
+    // clamp so start+duration never exceeds rangeEnd — otherwise jitter can push
+    // an item's finish past the slider's max value and it can never fully grow
+    starts.push(Math.min(Math.max(jittered, rangeStart), rangeEnd - duration));
+  }
+  return starts;
+}
+
+// leaf.png's actual stem tip, sampled from its alpha channel (52x51 source, tapers
+// to a point near the bottom-left AND a second point near the top-right — using
+// the top-right tip here since that's the end meant to attach to the branch).
+const LEAF_STEM_FRAC = {x: 50/52, y: 1/51};
+
+// With the pivot at the tip (top-right in the source art), the leaf body points
+// down-left (~138°) when unrotated. Rotating by ~132° swings it to point straight
+// up from the pivot instead — used as the base angle for "upward-facing" leaves.
+const LEAF_UPWARD_ROTATION = 132;
+
+const LEAF_COUNT = 20;
+const FLOWER_COUNT = 3;
+const LEAF_DURATION = 14;   // slider-units each leaf takes to reach full size
+const FLOWER_DURATION = 16;
+
+let leafSlots = [];
+let flowerSlots = [];
+
+// Distinct rotation offsets (from LEAF_UPWARD_ROTATION, i.e. straight up) for `count`
+// leaves: every leaf gets a different, non-vertical angle — none pointing straight up
+// (offset 0) or straight down (offset ±180), and no two leaves share the same angle.
+function distinctLeafOffsets(count){
+  const half = Math.ceil(count / 2);
+  const magnitudes = [];
+  for (let i = 0; i < half; i++){
+    magnitudes.push(12 + (47 - 12) * (half === 1 ? 0 : i / (half - 1))); // 12deg..47deg base, +/-3deg jitter added later, so the final angle never exceeds 50deg
+  }
+  const offsets = [];
+  magnitudes.forEach(m => { offsets.push(m); offsets.push(-m); });
+  offsets.length = count; // trim if count was odd
+  // shuffle so the magnitude-ordering isn't visually left-to-right predictable
+  for (let i = offsets.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    [offsets[i], offsets[j]] = [offsets[j], offsets[i]];
+  }
+  return offsets;
+}
+
+function makeSlot(xRangeStart, xRangeEnd, count, jitterFrac, useLeafAngles){
+  const slots = [];
+  const leafOffsets = useLeafAngles ? distinctLeafOffsets(count) : null;
+  for (let i = 0; i < count; i++){
+    const x = xRangeStart + (xRangeEnd - xRangeStart) * (count === 1 ? 0.5 : i / (count - 1));
+    const local = branchLocalAt(x);
+    const thickness = Math.max(4, local.bot - local.top);
+    let y;
+    if (useLeafAngles){
+      // Alternate top-half/bottom-half of the branch's actual thickness (not just
+      // tiny jitter around the centerline) so leaves visibly appear on both sides.
+      const inBottomHalf = i % 2 === 1;
+      y = inBottomHalf
+        ? local.bot - thickness * (0.1 + Math.random() * 0.3)
+        : local.top + thickness * (0.1 + Math.random() * 0.3);
+    } else {
+      y = (local.top + local.bot) / 2 + (Math.random() * 2 - 1) * thickness * jitterFrac;
+    }
+    // With no rotation, the leaf's body extends down-and-left from its pivot tip
+    // (the tip sits top-right in the source art). LEAF_UPWARD_ROTATION is straight
+    // up; each leaf gets a distinct, non-vertical offset from that so every leaf
+    // leans at its own angle instead of pointing directly up or down. Offset
+    // magnitude is capped at 50deg (12-47deg base + up to 3deg jitter).
+    const rotation = useLeafAngles
+      ? LEAF_UPWARD_ROTATION + leafOffsets[i] + (Math.random() * 6 - 3)
+      : Math.random() * 360;
+    slots.push({
+      x, y,
+      rotation,
+      scaleMax: 0.8 + Math.random() * 0.35,
+      flip: Math.random() < 0.5 ? -1 : 1,
+    });
+  }
+  return slots;
+}
+
+function generateFoliage(){
+  const foliage = document.getElementById("foliage");
+  foliage.innerHTML = "";
+  leafSlots = makeSlot(15, 545, LEAF_COUNT, 0.25, true).map((s, i) => ({...s, start: 0}));
+  flowerSlots = makeSlot(40, 530, FLOWER_COUNT, 0.15, false).map((s, i) => ({...s, start: 0}));
+
+  const leafStarts = distributeSchedule(LEAF_COUNT, 0, 70, LEAF_DURATION);
+  const flowerStarts = distributeSchedule(FLOWER_COUNT, 68, 100, FLOWER_DURATION);
+  leafSlots.forEach((s, i) => s.start = leafStarts[i]);
+  flowerSlots.forEach((s, i) => s.start = flowerStarts[i]);
+
+  const buildEl = (slot, cls, src, baseSize) => {
+    const img = document.createElement("img");
+    img.src = src;
+    img.className = cls;
+    img.style.left = `${(slot.x / BRANCH_IMG_SIZE.w) * 100}%`;
+    img.style.top  = `${(slot.y / BRANCH_IMG_SIZE.h) * 100}%`;
+    // pivot lands exactly on the branch point; scale grows from that same pivot.
+    // Leaves pivot on their actual stem tip (sampled from leaf.png's alpha shape,
+    // not a bounding-box corner); flowers keep a center pivot. scaleX(flip) mirrors
+    // the leaf left/right around that same fixed stem point for variety.
+    let anchorTranslate, origin;
+    if (cls === "leaf"){
+      const fx = LEAF_STEM_FRAC.x * 100, fy = LEAF_STEM_FRAC.y * 100;
+      anchorTranslate = `translate(-${fx}%, -${fy}%)`;
+      origin = `${fx}% ${fy}%`;
+    } else {
+      anchorTranslate = "translate(-50%, -50%)"; origin = "50% 50%";
+    }
+    img.style.transformOrigin = origin;
+    img.dataset.anchor = anchorTranslate;
+    img.dataset.rotation = slot.rotation;
+    img.dataset.flip = slot.flip;
+    img.dataset.scaleMax = slot.scaleMax;
+    img.style.transform = `${anchorTranslate} rotate(${slot.rotation}deg) scale(${slot.flip * 0.0001}, 0.0001)`;
+    foliage.appendChild(img);
+    return img;
+  };
+
+  leafSlots.forEach(s => { s.el = buildEl(s, "leaf", `${BASE}leaf.png`); });
+  flowerSlots.forEach(s => { s.el = buildEl(s, "flower", `${BASE}flower.png`); });
+
+  applyGrowth(Number(document.getElementById("growthSlider").value));
+}
+
+function applyGrowth(sliderValue){
+  const apply = (slots, duration) => {
+    slots.forEach(s => {
+      const local = Math.max(0, Math.min(1, (sliderValue - s.start) / duration));
+      const scale = local * s.scaleMax;
+      s.el.style.transform = `${s.el.dataset.anchor} rotate(${s.rotation}deg) scale(${s.flip * scale || 0.0001}, ${scale || 0.0001})`;
+    });
+  };
+  apply(leafSlots, LEAF_DURATION);
+  apply(flowerSlots, FLOWER_DURATION);
+
+  const allFlowersFull = flowerSlots.length > 0 && flowerSlots.every(
+    s => (sliderValue - s.start) / FLOWER_DURATION >= 1
+  );
+  if (allFlowersFull) startPetalShower();
+  else stopPetalShower();
+}
+
+function setGrowth(value){
+  applyGrowth(Number(value));
+}
+
+/* ============================================================
+   PETAL SHOWER — once all flowers are fully bloomed, petals keep
+   falling continuously (not a one-off burst) from near the end of
+   the branch; each petal lands at the bottom, sits 5s, then vanishes
+   ============================================================ */
+let petalShowerInterval = null;
+
+function startPetalShower(){
+  if (petalShowerInterval) return;
+  spawnPetalWave();
+  petalShowerInterval = setInterval(spawnPetalWave, 1400 + Math.random() * 900);
+}
+
+function stopPetalShower(){
+  if (petalShowerInterval){ clearInterval(petalShowerInterval); petalShowerInterval = null; }
+}
+
+function spawnPetalWave(){
+  const branchRect = document.getElementById("branch").getBoundingClientRect();
+  const originX = branchRect.left + 40; // near the left (thin twig) end of the branch
+  const originY = branchRect.top + branchRect.height * 0.83; // that end sits low/thin, per the branch's sampled centerline
+  const scene = document.getElementById("scene");
+  const count = 2 + Math.floor(Math.random() * 3);
+
+  for (let i = 0; i < count; i++){
+    const petal = document.createElement("img");
+    petal.src = `${BASE}petals.png`;
+    petal.className = "petal";
+    const startX = originX + (Math.random() * 60 - 30);
+    const startY = originY + (Math.random() * 20 - 10);
+    const rot0 = Math.random() * 360;
+    const petalScale = 0.175 + Math.random() * 0.125; // 75% smaller than before
+    petal.style.left = startX + "px";
+    petal.style.top  = startY + "px";
+    petal.style.opacity = "1";
+    petal.style.transform = `translate(-50%,-50%) rotate(${rot0}deg) scale(${petalScale})`;
+    scene.appendChild(petal);
+
+    const driftX = Math.random() * 160 - 80;
+    const fallDuration = 4 + Math.random() * 2.5; // slower fall
+    const spin = rot0 + (Math.random() * 720 - 360);
+    const delay = Math.random() * 400; // stagger within the wave
+
+    setTimeout(() => {
+      requestAnimationFrame(() => {
+        petal.style.transition = `left ${fallDuration}s ease-in, top ${fallDuration}s ease-in, transform ${fallDuration}s ease-in`;
+        petal.style.left = (startX + driftX) + "px";
+        petal.style.top  = (window.innerHeight - 10) + "px";
+        petal.style.transform = `translate(-50%,-50%) rotate(${spin}deg) scale(${petalScale})`;
+      });
+
+      setTimeout(() => {
+        petal.style.transition = "opacity 0.6s ease-in";
+        petal.style.opacity = "0";
+        setTimeout(() => petal.remove(), 600);
+      }, fallDuration * 1000 + 5000);
+    }, delay);
+  }
+}
+
+// Source pixel size of treebranch_0.png, and an x sampled directly off its
+// alpha channel on the thick, flat part of the branch. The landing y uses that
+// column's TOP edge (branchLocalAt().top), i.e. the branch's outline/surface,
+// not its vertical center, so the bird's feet rest ON the branch, not inside it.
+const BRANCH_IMG_SIZE = {w: 561, h: 149};
+const LANDING_SPOT_PX = {x: 300};
+const FEET_OFFSET_PX = STILL_POS["0"].legs[1] * BIRD_SCALE; // birdRoot-center-to-feet distance on screen
+
+function getBranchLandingFraction(){
+  const rect = document.getElementById("branch").getBoundingClientRect();
+  const surfaceY = branchLocalAt(LANDING_SPOT_PX.x).top;
+  const px = rect.left + (LANDING_SPOT_PX.x / BRANCH_IMG_SIZE.w) * rect.width;
+  const py = rect.top  + (surfaceY / BRANCH_IMG_SIZE.h) * rect.height;
+  // py is where the feet should touch; shift up by the feet offset since
+  // moveBirdTo positions the birdRoot's center, not its feet.
+  return { x: px / window.innerWidth, y: (py - FEET_OFFSET_PX) / window.innerHeight };
+}
+
+function placeBirdAt(xPct, yPct){
+  rootEl.style.left = (window.innerWidth * xPct - BIRD_HALF) + "px";
+  rootEl.style.top  = (window.innerHeight * yPct - BIRD_HALF) + "px";
+}
+
+function moveBirdTo(xPct, yPct, durationS){
+  // linear, not ease-in-out: easing would decelerate toward ~0 velocity at the end
+  // of every leg (and re-accelerate at the start of the next), which reads as a
+  // little stutter at each waypoint — linear keeps the bird moving continuously.
+  rootEl.style.transition = `left ${durationS}s linear, top ${durationS}s linear`;
+  rootEl.style.left = (window.innerWidth * xPct - BIRD_HALF) + "px";
+  rootEl.style.top  = (window.innerHeight * yPct - BIRD_HALF) + "px";
+}
+
+async function flyRoute(steps){
+  // steps: [{dir, x, y}]. The movement transition always spans the full dwell
+  // time (not a shorter fixed duration) so the bird is animating continuously
+  // toward the next waypoint the entire time — no frozen pause between steps.
+  for (const step of steps){
+    setDirection(step.dir, true);
+    const dwell = FLAP_DIRS.includes(step.dir) ? 1400 : 400;
+    moveBirdTo(step.x, step.y, dwell / 1000);
+    await sleep(dwell);
+  }
+}
+
+// Facing compass (confirmed): 0=down/front(toward viewer), 45=down-left, 90=left,
+// 135=up-left, 180=up/back(away from viewer), 225=up-right, 270=right, 315=down-right.
+// Facing must always match the direction the bird is actually travelling on screen.
+
+// In All Process mode, the adult bird starts standing on the dock/platform;
+// the first time it actually flies off, the platform fades away underneath it
+// (it doesn't come back until the adult stage is re-entered).
+function fadeDockOnFirstFlight(){
+  if (processMode && PROCESS_STAGES[processIndex] === "adult"){
+    document.getElementById("stagePlatform").style.opacity = "0";
+  }
+}
+
+// Route 1: climb up, loop clockwise through all 8 directions (facing = direction of travel), land back at the bottom idle spot
+async function flySequenceCircle(){
+  if (isFlying) return;
+  isFlying = true;
+  fadeDockOnFirstFlight();
+  const cx = IDLE_POS.x, cy = 0.45, R = 0.15;
+
+  const steps = [
+    {dir:"180", x:cx-R,      y:cy       }, // takeoff, climbing straight up
+    {dir:"225", x:cx-R*0.71, y:cy-R*0.71}, // curving up-right
+    {dir:"270", x:cx,        y:cy-R     }, // moving right along the top
+    {dir:"315", x:cx+R*0.71, y:cy-R*0.71}, // curving down-right
+    {dir:"0",   x:cx+R,      y:cy       }, // moving down on the right side
+    {dir:"45",  x:cx+R*0.71, y:cy+R*0.71}, // curving down-left
+    {dir:"90",  x:cx,        y:cy+R     }, // moving left along the bottom
+    {dir:"135", x:cx-R*0.71, y:cy+R*0.71}, // curving up-left, closing the loop
+    {dir:"180", x:cx-R,      y:cy       }, // back to the start of the loop
+    {dir:"0",   x:IDLE_POS.x,y:IDLE_POS.y}, // descend straight down to the idle spot
+  ];
+  await flyRoute(steps);
+
+  // land: settle to still, front-facing, back at the bottom idle spot
+  isFlying = false;
+  setDirection("0", false);
+}
+
+// Route 2: fly diagonally up-right and land on the branch, facing matches travel the whole way
+async function flySequenceToBranch(){
+  if (isFlying) return;
+  isFlying = true;
+  fadeDockOnFirstFlight();
+  const land = getBranchLandingFraction(); // exact point on the brown branch pixels
+
+  const steps = [
+    {dir:"225", x:land.x-0.35, y:land.y+0.5 }, // climb up-right off the ground
+    {dir:"270", x:land.x-0.15, y:land.y+0.25}, // sustained right flap toward the branch
+    {dir:"225", x:land.x-0.04, y:land.y+0.1 }, // angle upward again
+    {dir:"180", x:land.x,      y:land.y     }, // final vertical approach into the branch
+  ];
+  await flyRoute(steps);
+
+  // land on the branch, settle to still, front-facing
+  isFlying = false;
+  setDirection("0", false);
+}
+
+function forceFly(){ if (!animationPaused) flySequenceCircle(); }
+function forceFlyToBranch(){ if (!animationPaused) flySequenceToBranch(); }
+
+async function flightScheduler(){
+  while (true){
+    await sleep(15000 + Math.random()*15000);
+    if (!animationPaused && !isFlying){
+      if (Math.random() < 0.5) await flySequenceCircle();
+      else await flySequenceToBranch();
+    }
+  }
+}
+
+/* ============================================================
+   CALIBRATION MODE (ADULT BIRD) — drag a part with the mouse to find
+   its correct offset relative to the bird root's center. The readout
+   shows values already converted into STILL_POS / FLY_POS's coordinate
+   space, so you can copy them straight into those tables.
+   ============================================================ */
+let calibrating = false;
+let dragTarget = null;
+let dragStart = {x:0, y:0};
+let dragOrigin = [0,0];
+let dragScale = 1;
+let dragEl = null;
+
+const CALIB_PARTS = { wingL: wingLEl, wingR: wingREl, eyes: eyesEl };
+
+function freezeForCalibration(){
+  stopWingAnim();
+  stopFloat(); // freeze the continuous hover drift so the rig holds perfectly still
+  currentBobDeg = 0; currentFloatY = 0; applyRootTransform();
+  document.getElementById("calibReadout").textContent =
+    `dir ${currentDirection} / ${isFlying ? "fly" : "still"} — drag a part`;
+}
+
+// Lets you pick which pose (direction + still/fly) to calibrate while paused,
+// since the automatic loops that would normally cycle through poses are frozen.
+function calibSetPose(){
+  const dir = document.getElementById("calibDirSelect").value;
+  const flying = document.querySelector('input[name="calibState"]:checked').value === "fly";
+  setDirection(dir, flying);
+  if (calibrating) freezeForCalibration();
+}
+
+function toggleCalibration(){
+  calibrating = !calibrating;
+  animationPaused = calibrating; // freeze blinking/expressions/scheduled flights while calibrating
+  document.getElementById("calibBtn").textContent = calibrating ? "Exit calibration" : "Calibrate positions";
+  document.getElementById("calibReadout").style.display = calibrating ? "block" : "none";
+  document.getElementById("calibControls").style.display = calibrating ? "block" : "none";
+  for (const name in CALIB_PARTS){
+    CALIB_PARTS[name].style.pointerEvents = calibrating ? "auto" : "none";
+    CALIB_PARTS[name].style.cursor = calibrating ? "grab" : "default";
+    CALIB_PARTS[name].style.outline = calibrating ? "2px dashed rgba(255,0,0,0.6)" : "none";
+  }
+  if (calibrating){
+    document.getElementById("calibDirSelect").value = currentDirection;
+    document.querySelector(`input[name="calibState"][value="${isFlying ? "fly" : "still"}"]`).checked = true;
+    freezeForCalibration();
+  } else {
+    setDirection(currentDirection, isFlying); // resumes wing anim / float as appropriate
+  }
+}
+
+// Shared by every calibration mode (adult bird + both egg stages): reads the
+// pixel offset out of an element's existing transform, regardless of whatever
+// else (rotate, etc.) follows it in the transform string.
+function getOffset(el){
+  const m = /translate\(([-.\d]+)px,\s*([-.\d]+)px\)/.exec(el.style.transform);
+  return m ? [parseFloat(m[1]), parseFloat(m[2])] : [0,0];
+}
+
+function startDrag(name, ev){
+  if (!calibrating) return;
+  dragTarget = name;
+  dragEl = CALIB_PARTS[name];
+  dragScale = BIRD_SCALE;
+  dragStart = {x: ev.clientX, y: ev.clientY};
+  dragOrigin = getOffset(dragEl);
+  ev.preventDefault();
+}
+
+function onDragMove(ev){
+  if (!dragTarget) return;
+  const dx = (ev.clientX - dragStart.x) / dragScale;
+  const dy = (ev.clientY - dragStart.y) / dragScale;
+  const newX = Math.round(dragOrigin[0] + dx);
+  const newY = Math.round(dragOrigin[1] + dy);
+  setPos(dragEl, [newX, newY]);
+  document.getElementById("calibReadout").textContent =
+    `${dragTarget} (dir ${currentDirection}, ${isFlying ? "fly" : "still"}): [${newX}, ${newY}]`;
+}
+
+function endDrag(){ dragTarget = null; dragEl = null; }
+
+for (const name in CALIB_PARTS){
+  CALIB_PARTS[name].addEventListener("pointerdown", (ev) => startDrag(name, ev));
+}
+window.addEventListener("pointermove", onDragMove);
+window.addEventListener("pointerup", endDrag);
+
+/* ============================================================
+   INIT
+   ============================================================ */
+window.addEventListener("resize", () => { positionBranch(); if(!isFlying) placeBirdAt(IDLE_POS.x, IDLE_POS.y); });
+
+positionBranch();
+generateFoliage();
+placeBirdAt(IDLE_POS.x, IDLE_POS.y);
+setDirection("0", false);
+
+idleLoop();
+expressionLoop();
+flightScheduler();
+
+
+/* ============================================================
+   STAGE TOGGLE — switch between the adult bird scene and the two
+   egg-hatching stages. Only one is visible/running at a time.
+   ============================================================ */
+let currentStage = "adult";
+let egg0Started = false;
+let egg1Started = false;
+let egg2Started = false;
+let egg3Started = false;
+let egg4Started = false;
+
+function showStage(stage){
+  currentStage = stage;
+  document.getElementById("scene").style.display = (stage === "adult") ? "block" : "none";
+  document.getElementById("eggScene0").style.display = (stage === "egg0") ? "block" : "none";
+  document.getElementById("eggScene1").style.display = (stage === "egg1") ? "block" : "none";
+  document.getElementById("eggScene2").style.display = (stage === "egg2") ? "block" : "none";
+  document.getElementById("eggScene3").style.display = (stage === "egg3") ? "block" : "none";
+  document.getElementById("eggScene4").style.display = (stage === "egg4") ? "block" : "none";
+  document.getElementById("btnAdult").style.fontWeight = (stage === "adult") ? "bold" : "normal";
+  document.getElementById("btnEgg0").style.fontWeight = (stage === "egg0") ? "bold" : "normal";
+  document.getElementById("btnEgg1").style.fontWeight = (stage === "egg1") ? "bold" : "normal";
+  document.getElementById("btnEgg2").style.fontWeight = (stage === "egg2") ? "bold" : "normal";
+  document.getElementById("btnEgg3").style.fontWeight = (stage === "egg3") ? "bold" : "normal";
+  document.getElementById("btnEgg4").style.fontWeight = (stage === "egg4") ? "bold" : "normal";
+
+  if (stage === "egg0" && !egg0Started){ egg0Started = true; egg0Ready(); }
+  if (stage === "egg1" && !egg1Started){ egg1Started = true; egg1Ready(); }
+  if (stage === "egg2" && !egg2Started){ egg2Started = true; egg2Ready(); }
+  if (stage === "egg3" && !egg3Started){ egg3Started = true; egg3Ready(); }
+  if (stage === "egg4" && !egg4Started){ egg4Started = true; egg4Ready(); }
+}
+
+/* ============================================================
+   ALL PROCESS MODE — walks through egg0 -> egg1 -> egg2 -> egg3 ->
+   egg4 -> adult in one place. Every egg stage is visually "docked":
+   shrunk and repositioned to stand where the adult bird stands, on
+   top of a shared stage platform, via a wrapper div (dockN) around
+   each stage's existing pivot — the pivot's own animation logic
+   (shake/rotate/etc.) is untouched, only the wrapper's position/scale
+   changes.
+
+   Unlike the main preview file, this calibration build's stages 1-4
+   already start in a static pose and only play their hatch sequence
+   via the existing "Play hatch animation" buttons/functions
+   (playEgg1Hatch etc., each already guarded against double-starting)
+   — so the process progress bar here just calls those directly,
+   no extra guarding needed.
+   ============================================================ */
+const PROCESS_STAGES = ["egg0", "egg1", "egg2", "egg3", "egg4", "adult"];
+const PROCESS_LABELS = {
+  egg0: "Stage 0 — Egg", egg1: "Stage 1", egg2: "Stage 2",
+  egg3: "Stage 3", egg4: "Stage 4", adult: "Adult Bird",
+};
+const DOCK_SCALE = 0.25; // same scale as the adult bird's own birdRoot
+const DOCK_SCALE_STAGE4 = 0.418; // birdout_bird.png (217x235) scaled to match adult body_0.png (314x393) @ 0.25 visual height
+const DOCK_TOP_PCT = "88%"; // matches IDLE_POS.y, where the adult bird stands
+const DOCK_UP_SHIFT_PX = { egg0: 40, egg1: 30, egg2: 30, egg3:50, egg4: 20 };
+const DOCK_IDS = { egg0: "dock0", egg1: "dock1", egg2: "dock2", egg3: "dock3", egg4: "dock4" };
+
+let processMode = false;
+let processIndex = 0;
+
+function setDocked(stageKey, on){
+  const id = DOCK_IDS[stageKey];
+  if (!id) return; // adult has no dock — it already stands at the right spot/scale
+  const el = document.getElementById(id);
+  el.style.top = on ? DOCK_TOP_PCT : "55%";
+  if (!on){ el.style.transform = ""; return; }
+  const scale = stageKey === "egg4" ? DOCK_SCALE_STAGE4 : DOCK_SCALE;
+  const shift = DOCK_UP_SHIFT_PX[stageKey] || 0;
+  el.style.transform = `translateY(-${shift}px) scale(${scale})`;
+}
+
+function setPerStageHudVisible(visible){
+  ["hud", "growthControl", "eggHud0", "eggHud1", "eggHud2", "eggHud3", "eggHud4"].forEach(id => {
+    document.getElementById(id).style.display = visible ? "" : "none";
+  });
+}
+
+function enterAllProcess(){
+  processMode = true;
+  processIndex = 0;
+  document.getElementById("processHud").style.display = "block";
+  document.getElementById("stagePlatform").style.display = "block";
+  document.getElementById("stagePlatform").style.opacity = "1";
+  document.getElementById("btnAllProcess").style.fontWeight = "bold";
+  setPerStageHudVisible(false);
+  PROCESS_STAGES.forEach(s => setDocked(s, s !== "adult"));
+  showProcessStage(0);
+}
+
+function exitAllProcess(){
+  processMode = false;
+  document.getElementById("processHud").style.display = "none";
+  document.getElementById("stagePlatform").style.display = "none";
+  document.getElementById("btnAllProcess").style.fontWeight = "normal";
+  hideGlow();
+  PROCESS_STAGES.forEach(s => setDocked(s, false));
+  setPerStageHudVisible(true);
+}
+
+function showProcessStage(i){
+  processIndex = Math.max(0, Math.min(PROCESS_STAGES.length - 1, i));
+  const key = PROCESS_STAGES[processIndex];
+  showStage(key);
+  if (key === "adult") document.getElementById("stagePlatform").style.opacity = "1";
+  document.getElementById("processStageLabel").textContent =
+    `${processIndex + 1}/${PROCESS_STAGES.length} — ${PROCESS_LABELS[key]}`;
+
+  // Stage 0's bar controls shake speed, the adult bird's bar controls branch
+  // growth (leaves/flowers) — both reuse existing controls. Stages 1-4 no
+  // longer wait for the progress bar to crack/hatch; it auto-plays on entry.
+  const slider = document.getElementById("processProgressSlider");
+  if (key === "egg0" || key === "adult"){
+    slider.style.display = "";
+    document.getElementById("processProgressLabel").style.display = "";
+    if (key === "egg0"){
+      document.getElementById("processProgressLabel").textContent = "Shake speed";
+      slider.value = Math.round((typeof egg0_speedFrac === "number" ? egg0_speedFrac : 0) * 100);
+    } else {
+      document.getElementById("processProgressLabel").textContent = "Branch growth";
+      slider.value = document.getElementById("growthSlider").value;
+    }
+  } else {
+    slider.style.display = "none";
+    document.getElementById("processProgressLabel").style.display = "none";
+    ({ egg1: playEgg1Hatch, egg2: playEgg2Hatch, egg3: playEgg3Hatch, egg4: playEgg4Hatch }[key])?.();
+  }
+}
+
+// Glow (back+front) fades in first, THEN the next/previous stage's bird/egg
+// appears while it's still glowing, then the glow fades back out — rather than
+// switching instantly and showing the glow at the same time.
+function transitionToProcessStage(i){
+  showGlow(PROCESS_STAGES[i]);
+  setTimeout(() => {
+    showProcessStage(i);
+    setTimeout(hideGlow, 1200);
+  }, 500);
+}
+function nextProcessStage(){ if (processIndex < PROCESS_STAGES.length - 1) transitionToProcessStage(processIndex + 1); }
+function prevProcessStage(){ if (processIndex > 0) transitionToProcessStage(processIndex - 1); }
+
+function onProcessProgress(value){
+  const key = PROCESS_STAGES[processIndex];
+  if (key === "egg0"){ setEgg0Speed(value); return; }
+  if (key === "adult"){
+    document.getElementById("growthSlider").value = value;
+    setGrowth(value);
+  }
+}
+
+const GLOW_UP_SHIFT_PX = { egg0: 40, egg1: 40, egg2: 40, egg3: 40, egg4: 40, adult: 40 };
+
+const GLOW_FRONT_BACK_EXTRA_UP_PX = 10; // front/back sit an extra 10px higher than glowExtra
+
+function showGlow(stageKey){
+  const shift = GLOW_UP_SHIFT_PX[stageKey || PROCESS_STAGES[processIndex]] || 0;
+  const frontBackT = `translate(-50%, calc(-50% - ${shift + GLOW_FRONT_BACK_EXTRA_UP_PX}px)) scale(1)`;
+  const extraT = `translate(-50%, calc(-50% - ${shift}px)) scale(1)`;
+  const back = document.getElementById("glowBack");
+  const front = document.getElementById("glowFront");
+  const extra = document.getElementById("glowExtra");
+  back.style.transform = frontBackT;
+  front.style.transform = frontBackT;
+  extra.style.transform = extraT;
+  back.style.opacity = "1";
+  front.style.opacity = "1";
+  extra.style.opacity = "1";
+}
+function hideGlow(){
+  ["glowBack", "glowFront", "glowExtra"].forEach(id => {
+    const el = document.getElementById(id);
+    el.style.opacity = "0";
+    el.style.transform = el.style.transform.replace(/scale\([^)]*\)/, "scale(0.35)");
+  });
+}
+
+const EGG_BASE = "bird/";
+
+/* ============================================================
+   EGG STAGE 0 — a plain, whole egg that idly shakes left/right; a
+   slider controls how fast it shakes (0 = nearly still, 100 = a
+   frantic rapid shake). Pivot sits at the bottom-middle of the egg
+   (egg.png is 235x313 — centered on its pivot, so bottom-middle is
+   [0, +156.5] from that center), so it rocks like it's balanced on
+   its base rather than spinning around its own center.
+   ============================================================ */
+const pivot0El  = document.getElementById("pivot0");
+const egg0El    = document.getElementById("egg0");
+const eggStatus0El = document.getElementById("eggStatus0");
+
+const EGG0_SHAKE_AMPLITUDE_DEG = 8;
+let egg0_speedFrac = 0; // 0..1, driven by the slider
+
+function egg0Ready(){
+  egg0El.style.transform = "translate(-50%, -50%)"; // centered on pivot0's origin
+  egg0El.src = EGG_BASE + "egg.png";
+}
+
+function setEgg0Speed(value){
+  egg0_speedFrac = Number(value) / 100;
+  eggStatus0El.textContent = egg0_speedFrac === 0 ? "idle" : `shaking (${Math.round(egg0_speedFrac * 100)}%)`;
+}
+
+let egg0_phase = 0;
+let egg0_lastTime = null;
+function egg0Tick(now){
+  if (egg0_lastTime === null) egg0_lastTime = now;
+  const dt = (now - egg0_lastTime) / 1000;
+  egg0_lastTime = now;
+  const freqHz = 0.15 + egg0_speedFrac * 3.5; // slow idle wobble up to a frantic shake
+  egg0_phase += dt * freqHz * Math.PI * 2;
+  const deg = EGG0_SHAKE_AMPLITUDE_DEG * Math.sin(egg0_phase);
+  pivot0El.style.transform = `rotate(${deg}deg)`;
+  requestAnimationFrame(egg0Tick);
+}
+requestAnimationFrame(egg0Tick); // runs continuously in the background, harmless while hidden
+
+function eggSetPos(el, xy){
+  el.style.transform = `translate(-50%, -50%) translate(${xy[0]}px, ${xy[1]}px)`;
+}
+// isPausedFn (optional): checked every frame — while it returns true, the tween
+// stops advancing and just holds at its current position (not finishing early),
+// resuming smoothly (no time-jump) once it starts returning false again.
+function eggRotateTween(el, targetDeg, duration, isPausedFn){
+  return new Promise(resolve => {
+    const startDeg = parseFloat((el.dataset.rot || "0"));
+    let start = null;
+    let pausedSince = null;
+    function step(now){
+      if (start === null) start = now;
+      if (isPausedFn && isPausedFn()){
+        pausedSince = pausedSince || now;
+        requestAnimationFrame(step);
+        return;
+      }
+      if (pausedSince){ start += (now - pausedSince); pausedSince = null; }
+      const t = Math.min((now - start) / duration, 1);
+      const deg = startDeg + (targetDeg - startDeg) * t;
+      el.dataset.rot = deg;
+      const base = el.dataset.baseTransform || "";
+      el.style.transform = base + ` rotate(${deg}deg)`;
+      if (t < 1) requestAnimationFrame(step);
+      else resolve();
+    }
+    requestAnimationFrame(step);
+  });
+}
+function eggSetPosWithRot(el, xy, deg){
+  const base = `translate(-50%, -50%) translate(${xy[0]}px, ${xy[1]}px)`;
+  el.dataset.baseTransform = base;
+  el.dataset.rot = deg;
+  el.style.transform = base + ` rotate(${deg}deg)`;
+}
+function eggSetPosScale(el, xy, scale){
+  el.style.transform = `translate(-50%, -50%) translate(${xy[0]}px, ${xy[1]}px) scale(${scale})`;
+}
+
+/* ============================================================
+   EGG STAGE 1 — simple peek loop, no hands, shell just tilts
+   open/closed each peek (mirrors birdout_1.gd: shake_on_reentry,
+   shell_open_rotation = -35 anticlockwise, peek_rise_amount = 20)
+   ============================================================ */
+
+const eggPivot1El    = document.getElementById("eggPivot1");
+const eggBack1El     = document.getElementById("eggshellBack1");
+const birdInShell1El = document.getElementById("birdInShell1");
+const birdBody1El    = document.getElementById("birdBody1");
+const eggEyes1El     = document.getElementById("eggEyes1");
+const eggTopPivot1El = document.getElementById("eggshellTopPivot1");
+const eggTop1El      = document.getElementById("eggshellTop1");
+const eggBottom1El   = document.getElementById("eggshellBottom1");
+const eggStatus1El   = document.getElementById("eggStatus1");
+
+const s1_birdBaseY = -148;
+const s1_shellClosedRot = 0.0;
+const s1_shellOpenRot = -55.0; // wider shell-open angle
+const s1_peekRise = 35.0; // bird rises a bit more on each peek
+let s1_isPeeking = false, s1_isBlinking = false, s1_isExpressing = false;
+let s1Paused = false; // true while calibrating egg stage 1
+
+function egg1Ready(){
+  eggSetPos(eggBack1El, [-5, -67]);
+  eggSetPos(birdInShell1El, [0, s1_birdBaseY]);
+  eggSetPos(birdBody1El, [-7, 88]);
+  eggSetPos(eggEyes1El, [-8, 97]);
+  eggSetPos(eggBottom1El, [-8, 9]);
+  eggSetPosWithRot(eggTopPivot1El, [-123, -224], s1_shellClosedRot);
+
+  eggBack1El.src = EGG_BASE + "birdout_shell/eggshell_back.png";
+  birdBody1El.src = EGG_BASE + "birdout_bird/birdout_bird.png";
+  eggEyes1El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+  eggBottom1El.src = EGG_BASE + "birdout_shell/eggshell_bottom.png";
+  eggTop1El.src = EGG_BASE + "birdout_shell/eggshell_top.png";
+
+  // Calibration build: stays in this static resting pose instead of auto-playing
+  // the hatch sequence, so the shell doesn't move out from under you while you're
+  // trying to calibrate its closed position. Use the "Play hatch animation"
+  // button to preview the sequence on demand.
+}
+
+async function egg1HatchSequence(){
+  await egg1ShakeOnReentry();
+  await egg1RiseTween(0, 1, 400);
+  s1_isPeeking = true;
+  egg1StartPeekLoop();
+  egg1StartBlinkAndExpression();
+}
+
+// Guards against the peek/blink loops (each an infinite while(true)) being
+// started more than once if the button is clicked repeatedly.
+let s1_hatchStarted = false;
+function playEgg1Hatch(){
+  if (s1_hatchStarted) return;
+  s1_hatchStarted = true;
+  egg1HatchSequence();
+}
+
+async function egg1StartPeekLoop(){
+  while (true){
+    await sleep((3 + Math.random()*4) * 1000);
+    if (!s1Paused) await egg1PeekUp();
+  }
+}
+
+async function egg1PeekUp(){
+  s1_isPeeking = true;
+  await egg1ShakeOnReentry();
+  await egg1RiseTween(0, 1, 300);
+  await sleep((0.4 + Math.random()*0.4) * 1000);
+  await egg1RiseTween(1, 0, 300);
+  s1_isPeeking = false;
+}
+
+function egg1RiseTween(from, to, duration){
+  return new Promise(resolve => {
+    let start = null;
+    let pausedSince = null;
+    function step(now){
+      if (start === null) start = now;
+      if (s1Paused){
+        pausedSince = pausedSince || now;
+        requestAnimationFrame(step);
+        return;
+      }
+      if (pausedSince){ start += (now - pausedSince); pausedSince = null; }
+      const t = Math.min((now - start) / duration, 1);
+      const progress = from + (to - from) * t;
+      eggSetPos(birdInShell1El, [0, s1_birdBaseY - s1_peekRise * progress]);
+      const rot = s1_shellClosedRot + (s1_shellOpenRot - s1_shellClosedRot) * progress;
+      eggTopPivot1El.dataset.rot = rot;
+      eggTopPivot1El.style.transform = (eggTopPivot1El.dataset.baseTransform || "") + ` rotate(${rot}deg)`;
+      if (t < 1) requestAnimationFrame(step);
+      else resolve();
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+async function egg1ShakeOnReentry(){
+  const steps = [[8,80],[-6,100],[3,90],[0,100]];
+  for (const [deg, dur] of steps) await eggRotateTween(eggPivot1El, deg, dur, () => s1Paused);
+}
+
+function egg1StartBlinkAndExpression(){
+  egg1ScheduleBlink();
+  egg1ScheduleExpression();
+}
+async function egg1ScheduleBlink(){
+  await sleep(5000);
+  if (!s1Paused && !s1_isExpressing && s1_isPeeking) await egg1DoBlink();
+  egg1ScheduleBlink();
+}
+async function egg1DoBlink(){
+  s1_isBlinking = true;
+  const frames = ["0","1","2","3","2","1","0"];
+  for (const f of frames){
+    if (!s1_isPeeking) break;
+    eggEyes1El.src = EGG_BASE + `birdout_eye/eye_normal_front_${f}.png`;
+    await sleep(50);
+  }
+  s1_isBlinking = false;
+  if (s1_isPeeking) eggEyes1El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+}
+async function egg1ScheduleExpression(){
+  await sleep((6 + Math.random()*6) * 1000);
+  if (!s1Paused && !s1_isBlinking && s1_isPeeking) await egg1DoExpression();
+  egg1ScheduleExpression();
+}
+async function egg1DoExpression(){
+  s1_isExpressing = true;
+  const choices = ["angry","happy","sad"];
+  const choice = choices[Math.floor(Math.random()*choices.length)];
+  if (choice === "angry"){
+    if (!s1_isPeeking){ s1_isExpressing=false; return; }
+    eggEyes1El.src = EGG_BASE + "birdout_eye/eye_angry_front_0.png"; await sleep(300);
+    if (!s1_isPeeking){ s1_isExpressing=false; return; }
+    eggEyes1El.src = EGG_BASE + "birdout_eye/eye_angry_front_1.png"; await sleep(1000);
+  } else if (choice === "happy"){
+    if (!s1_isPeeking){ s1_isExpressing=false; return; }
+    eggEyes1El.src = EGG_BASE + "birdout_eye/eye_happy_front_0.png"; await sleep(1500);
+  } else {
+    for (let i = 0; i <= 6; i++){
+      if (!s1_isPeeking) break;
+      eggEyes1El.src = EGG_BASE + `birdout_eye/eye_sad_front_${i}.png`;
+      await sleep(150);
+    }
+  }
+  s1_isExpressing = false;
+  if (s1_isPeeking) eggEyes1El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+}
+
+/* ============================================================
+   EGG STAGE 2 — hands, shell push-open + permanent detach/fall/
+   fade on first rise, wave (skipped angry/sad), random wobble
+   ============================================================ */
+
+const eggPivot2El    = document.getElementById("eggPivot2");
+const eggBack2El     = document.getElementById("eggshellBack2");
+const birdInShell2El = document.getElementById("birdInShell2");
+const birdBody2El    = document.getElementById("birdBody2");
+const eggEyes2El     = document.getElementById("eggEyes2");
+const handL2El       = document.getElementById("handL2");
+const handR2El       = document.getElementById("handR2");
+const eggTopPivot2El = document.getElementById("eggshellTopPivot2");
+const eggTop2El      = document.getElementById("eggshellTop2");
+const eggBottom2El   = document.getElementById("eggshellBottom2");
+const eggStatus2El   = document.getElementById("eggStatus2");
+
+const s2_birdBaseY = -148;
+const s2_shellClosedRot = 11.3;
+const s2_shellOpenRot = 35.0;
+const s2_shellClosedPos = [-123, -183];
+const s2_shellOpenOffset = [40, -60];
+const s2_peekRise = 45.0;
+const s2_handRHidden = [-40, 40];
+const s2_handREmerged = [-108, 89];
+const s2_handRIdle = [-106, 147];
+const s2_handL2Pos = [133, 114]; // handL2's position while fully peeking out
+const S2_BOTTOM_SHELL_POS = [-2, 15]; // eggBottom2's position — shared so the fallen top shell can land on the same axis
+const s2_handL2ShiftLeft = 60; // extra leftward travel as it shrinks back into the shell
+
+let s2_isPeeking = false, s2_isBlinking = false, s2_isExpressing = false;
+let s2Paused = false;       // true while calibrating egg stage 2
+let s2ManualPaused = false; // true while the standalone Pause button is active
+function egg2IsPaused(){ return s2Paused || s2ManualPaused; }
+function toggleEgg2Pause(){
+  s2ManualPaused = !s2ManualPaused;
+  document.getElementById("egg2PauseBtn").textContent = s2ManualPaused ? "Resume" : "Pause";
+}
+let s2_currentExpression = "normal";
+let s2_isWaving = false;
+let s2_shellDetached = false;
+
+function egg2Ready(){
+  eggSetPos(eggBack2El, [2, -58]);
+  eggSetPos(birdInShell2El, [0, s2_birdBaseY]);
+  eggSetPos(birdBody2El, [-4, 111]);
+  eggSetPos(eggEyes2El, [-5, 124]);
+  eggSetPos(handL2El, [133, 114]);
+  eggSetPos(handR2El, s2_handRHidden);
+  eggSetPos(eggBottom2El, S2_BOTTOM_SHELL_POS);
+  eggSetPosWithRot(eggTopPivot2El, s2_shellClosedPos, s2_shellClosedRot);
+
+  eggBack2El.src = EGG_BASE + "birdout_shell/eggshell_back.png";
+  birdBody2El.src = EGG_BASE + "birdout_bird/birdout_nohand.png";
+  eggEyes2El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+  handR2El.src = EGG_BASE + "birdout_righthand/hand_lift_L.png";
+  handR2El.style.display = "none";
+  handL2El.src = EGG_BASE + "birdout_lefthand/hand_wave_0.png";
+  eggBottom2El.src = EGG_BASE + "birdout_shell/eggshell_bottom.png";
+  eggTop2El.src = EGG_BASE + "birdout_shell/eggshell_top.png";
+
+  // Calibration build: stays in this static resting pose instead of auto-playing
+  // the hatch sequence, so the shell doesn't move out from under you while you're
+  // trying to calibrate its closed position. Use the "Play hatch animation"
+  // button to preview the sequence on demand.
+}
+
+async function egg2HatchSequence(){
+  await egg2ShakeOnRise();
+  await egg2RiseTween(0, 1, 400);
+  await egg2ShellFallAndFade();
+  s2_isPeeking = true;
+  egg2StartPeekLoop();
+  egg2StartBlinkAndExpression();
+  egg2StartRandomWobble();
+}
+
+// Guards against the peek/blink/wobble loops (each an infinite while(true)) being
+// started more than once if the button is clicked repeatedly.
+let s2_hatchStarted = false;
+function playEgg2Hatch(){
+  if (s2_hatchStarted) return;
+  s2_hatchStarted = true;
+  egg2HatchSequence();
+}
+
+async function egg2StartPeekLoop(){
+  while (true){
+    await sleep((3 + Math.random()*4) * 1000);
+    if (!egg2IsPaused()) await egg2PeekUp();
+  }
+}
+
+async function egg2PeekUp(){
+  s2_isPeeking = true;
+  await egg2ShakeOnRise();
+  await egg2RiseTween(0, 1, 300);
+
+  if (!s2_isWaving && s2_currentExpression !== "angry" && s2_currentExpression !== "sad" && Math.random() < 0.5){
+    await egg2DoWave();
+  } else {
+    await sleep((0.4 + Math.random()*0.4) * 1000);
+  }
+
+  await egg2RiseTween(1, 0, 300);
+  s2_isPeeking = false;
+}
+
+function egg2RiseTween(from, to, duration){
+  return new Promise(resolve => {
+    let start = null;
+    let pausedSince = null;
+    function step(now){
+      if (start === null) start = now;
+      if (egg2IsPaused()){
+        pausedSince = pausedSince || now;
+        requestAnimationFrame(step);
+        return;
+      }
+      if (pausedSince){ start += (now - pausedSince); pausedSince = null; }
+      const t = Math.min((now - start) / duration, 1);
+      const progress = from + (to - from) * t;
+      eggSetPos(birdInShell2El, [0, s2_birdBaseY - s2_peekRise * progress]);
+
+      // both hands shrink toward the shell as the bird retreats (progress -> 0)
+      // and grow back to full size as it peeks out, so they tuck in behind the
+      // shell instead of sticking out at full size while the bird is hidden.
+      // handL2 also slides further left as it shrinks, to duck behind the shell.
+      const handScale = 0.4 + 0.6 * progress;
+      const handLX = s2_handL2Pos[0] - s2_handL2ShiftLeft * (1 - progress);
+      eggSetPosScale(handL2El, [handLX, s2_handL2Pos[1]], handScale);
+
+      if (!s2_shellDetached){
+        const rot = s2_shellClosedRot + (s2_shellOpenRot - s2_shellClosedRot) * progress;
+        const x = s2_shellClosedPos[0] + s2_shellOpenOffset[0] * progress;
+        const y = s2_shellClosedPos[1] + s2_shellOpenOffset[1] * progress;
+        eggSetPosWithRot(eggTopPivot2El, [x, y], rot);
+
+        handR2El.style.display = progress > 0.02 ? "block" : "none";
+        const hx = s2_handRHidden[0] + (s2_handREmerged[0] - s2_handRHidden[0]) * progress;
+        const hy = s2_handRHidden[1] + (s2_handREmerged[1] - s2_handRHidden[1]) * progress;
+        eggSetPosScale(handR2El, [hx, hy], handScale);
+      } else {
+        eggSetPosScale(handR2El, s2_handRIdle, handScale);
+      }
+
+      if (t < 1) requestAnimationFrame(step);
+      else resolve();
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+async function egg2ShellFallAndFade(){
+  // Thrown up-and-right by the bird's movement, arcs over the top, then falls
+  // and lands 200px to the right of the bottom shell, on the exact same
+  // horizontal axis (same y as S2_BOTTOM_SHELL_POS) — close enough to stay on
+  // screen instead of flying off the edge. x moves steadily rightward the
+  // whole time; y follows a parabola — rising above the straight line to the
+  // landing spot at first, then dropping back down onto it (a real throw arc).
+  const landedPos = [S2_BOTTOM_SHELL_POS[0]  , -300];
+  const startPos = [
+    s2_shellClosedPos[0] + s2_shellOpenOffset[0],
+    s2_shellClosedPos[1] + s2_shellOpenOffset[1]
+  ];
+  const arcHeight = 60; // how high above the straight line it rises at the peak of the throw
+  const duration = 900;
+  let start = null;
+  let pausedSince = null;
+
+  await new Promise(resolve => {
+    function step(now){
+      if (start === null) start = now;
+      if (egg2IsPaused()){
+        pausedSince = pausedSince || now;
+        requestAnimationFrame(step);
+        return;
+      }
+      if (pausedSince){ start += (now - pausedSince); pausedSince = null; }
+      const t = Math.min((now - start) / duration, 1);
+      const ease = t * t; // approximates EASE_IN, applied to x and rotation
+      const x = startPos[0] + (landedPos[0] - startPos[0]) * ease;
+      const yLinear = startPos[1] + (landedPos[1] - startPos[1]) * t;
+      const y = yLinear - arcHeight * 4 * t * (1 - t); // parabolic bulge upward mid-throw
+      const rot = s2_shellOpenRot + (220 - s2_shellOpenRot) * ease;
+      eggSetPosWithRot(eggTopPivot2El, [x, y], rot);
+      if (t < 1) requestAnimationFrame(step);
+      else resolve();
+    }
+    requestAnimationFrame(step);
+  });
+
+  handR2El.src = EGG_BASE + "birdout_righthand/righthand_idle.png";
+  handR2El.style.display = "block";
+  eggSetPos(handR2El, s2_handRIdle);
+
+  await sleep(3000); // sits on the floor for a beat before fading away
+  eggTop2El.style.transition = "opacity 0.6s ease-in";
+  eggTop2El.style.opacity = "0";
+  await sleep(600);
+  eggTopPivot2El.style.display = "none";
+  s2_shellDetached = true;
+  eggStatus2El.textContent = "hatched — shell gone";
+}
+
+async function egg2ShakeOnRise(){
+  const steps = [[8,80],[-6,100],[3,90],[0,100]];
+  for (const [deg, dur] of steps) await eggRotateTween(eggPivot2El, deg, dur, egg2IsPaused);
+}
+
+async function egg2StartRandomWobble(){
+  while (true){
+    await sleep((4 + Math.random()*5) * 1000);
+    if (!egg2IsPaused()){
+      await eggRotateTween(eggPivot2El, 15, 300, egg2IsPaused);
+      await eggRotateTween(eggPivot2El, -15, 400, egg2IsPaused);
+      await eggRotateTween(eggPivot2El, 0, 300, egg2IsPaused);
+    }
+  }
+}
+
+// Wave: frames 0-4, ping-pong back to 0, over ~3 seconds total
+async function egg2DoWave(){
+  s2_isWaving = true;
+  const frames = [0,1,2,3,4,3,2,1,0];
+  const stepMs = 3000 / frames.length;
+  for (const f of frames){
+    handL2El.src = EGG_BASE + `birdout_lefthand/hand_wave_${f}.png`;
+    await sleep(stepMs);
+  }
+  handL2El.src = EGG_BASE + "birdout_lefthand/hand_wave_0.png"; // frame 0 doubles as idle/still
+  s2_isWaving = false;
+}
+
+function egg2StartBlinkAndExpression(){
+  egg2ScheduleBlink();
+  egg2ScheduleExpression();
+}
+async function egg2ScheduleBlink(){
+  await sleep(5000);
+  if (!egg2IsPaused() && !s2_isExpressing && s2_isPeeking) await egg2DoBlink();
+  egg2ScheduleBlink();
+}
+async function egg2DoBlink(){
+  s2_isBlinking = true;
+  const frames = ["0","1","2","3","2","1","0"];
+  for (const f of frames){
+    if (!s2_isPeeking) break;
+    eggEyes2El.src = EGG_BASE + `birdout_eye/eye_normal_front_${f}.png`;
+    await sleep(50);
+  }
+  s2_isBlinking = false;
+  if (s2_isPeeking) eggEyes2El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+}
+async function egg2ScheduleExpression(){
+  await sleep((6 + Math.random()*6) * 1000);
+  if (!egg2IsPaused() && !s2_isBlinking && s2_isPeeking) await egg2DoExpression();
+  egg2ScheduleExpression();
+}
+async function egg2DoExpression(){
+  s2_isExpressing = true;
+  const choices = ["angry","happy","sad"];
+  const choice = choices[Math.floor(Math.random()*choices.length)];
+  s2_currentExpression = choice;
+  if (choice === "angry"){
+    if (!s2_isPeeking){ s2_isExpressing=false; s2_currentExpression="normal"; return; }
+    eggEyes2El.src = EGG_BASE + "birdout_eye/eye_angry_front_0.png"; await sleep(300);
+    if (!s2_isPeeking){ s2_isExpressing=false; s2_currentExpression="normal"; return; }
+    eggEyes2El.src = EGG_BASE + "birdout_eye/eye_angry_front_1.png"; await sleep(1000);
+  } else if (choice === "happy"){
+    if (!s2_isPeeking){ s2_isExpressing=false; s2_currentExpression="normal"; return; }
+    eggEyes2El.src = EGG_BASE + "birdout_eye/eye_happy_front_0.png"; await sleep(1500);
+  } else {
+    for (let i = 0; i <= 6; i++){
+      if (!s2_isPeeking) break;
+      eggEyes2El.src = EGG_BASE + `birdout_eye/eye_sad_front_${i}.png`;
+      await sleep(150);
+    }
+  }
+  s2_isExpressing = false;
+  s2_currentExpression = "normal";
+  if (s2_isPeeking) eggEyes2El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+}
+
+/* ============================================================
+   EGG STAGE 3 — legs crack out of the shell, then wings/legs move
+   in random bursts and the whole bird wobbles occasionally. Sad
+   expression gates off wing-flap and leg-open/close bursts.
+
+   Calibration build note: unlike egg1Ready()/egg2Ready(), this
+   starts in the fully-emerged state (holes visible, legs full size)
+   rather than the tiny/hidden pre-crack state — that's the pose that
+   actually needs calibrating (leg/hole/shell positions). Use "Play
+   hatch animation" to see the crack-and-emerge sequence on demand.
+   ============================================================ */
+
+const pivot3El          = document.getElementById("pivot3");
+const bodyImg3El        = document.getElementById("bodyImg3");
+const eyes3El           = document.getElementById("eyes3");
+const rightWingPivot3El = document.getElementById("rightWingPivot3");
+const leftWingPivot3El  = document.getElementById("leftWingPivot3");
+const rightWing3El      = document.getElementById("rightWing3");
+const leftWing3El       = document.getElementById("leftWing3");
+const shell3El          = document.getElementById("shell3");
+const leftLegHole3El    = document.getElementById("leftLegHole3");
+const rightLegHole3El   = document.getElementById("rightLegHole3");
+const leftLegPivot3El   = document.getElementById("leftLegPivot3");
+const rightLegPivot3El  = document.getElementById("rightLegPivot3");
+const leftLeg3El        = document.getElementById("leftLeg3");
+const rightLeg3El       = document.getElementById("rightLeg3");
+const eggStatus3El      = document.getElementById("eggStatus3");
+
+// Calibrated positions
+const S3_LEFT_LEG_PIVOT_POS   = [45, 141];
+const S3_RIGHT_LEG_PIVOT_POS  = [-57, 135];
+const S3_LEFT_LEG_IMG_OFFSET  = [-2, -43];
+const S3_RIGHT_LEG_IMG_OFFSET = [1, -38];
+const S3_LEFT_HOLE_POS        = [49, 139];
+const S3_RIGHT_HOLE_POS       = [-53, 135];
+const S3_LEFT_WING_PIVOT_POS  = [92, 23];
+const S3_RIGHT_WING_PIVOT_POS = [-93, 20];
+const S3_LEFT_WING_IMG_OFFSET  = [74.5, -9.5];
+const S3_RIGHT_WING_IMG_OFFSET = [-74.5, -8.5];
+const S3_SHELL_POS = [0, 80];
+
+let s3_currentExpression = "normal";
+let s3_isBlinking = false, s3_isExpressing = false;
+let s3_legsOut = false;
+let s3Paused = false;       // true while calibrating egg stage 3
+let s3ManualPaused = false; // true while the standalone Pause button is active
+function egg3IsPaused(){ return s3Paused || s3ManualPaused; }
+function toggleEgg3Pause(){
+  s3ManualPaused = !s3ManualPaused;
+  document.getElementById("egg3PauseBtn").textContent = s3ManualPaused ? "Resume" : "Pause";
+}
+
+// These pivot divs (wing/leg/whole-bird) have zero intrinsic size — same issue
+// as the shell-top pivots — so a percentage transform-origin on them is
+// meaningless. This computes a pixel-based origin from the actual image that's
+// positioned inside the pivot (via eggSetPos(imgEl, localOffset)), once that
+// image has really loaded, rather than a guessed number. Anchor is where on
+// the image the pivot should sit; extraY nudges it further down (positive) or
+// up (negative) past that anchor point.
+function setPivotOriginOnImage(pivotEl, imgEl, localOffset, anchor, extraY){
+  extraY = extraY || 0;
+  function apply(){
+    const w = imgEl.naturalWidth, h = imgEl.naturalHeight;
+    if (!w || !h) return; // asset missing/not loaded — leave the default origin
+    let ox = localOffset[0], oy = localOffset[1];
+    if (anchor === "left-mid") ox -= w / 2;
+    else if (anchor === "right-mid") ox += w / 2;
+    else if (anchor === "top-mid") oy -= h / 2;
+    else if (anchor === "bottom-mid") oy += h / 2;
+    oy += extraY;
+    pivotEl.style.transformOrigin = `${ox}px ${oy}px`;
+  }
+  if (imgEl.complete && imgEl.naturalWidth > 0) apply();
+  else imgEl.addEventListener("load", apply, { once: true });
+}
+
+function egg3Ready(){
+  eggSetPos(bodyImg3El, [0, 0]);
+  eggSetPos(eyes3El, [0, 10]);
+  eggSetPos(shell3El, S3_SHELL_POS);
+  eggSetPos(leftLegHole3El, S3_LEFT_HOLE_POS);
+  eggSetPos(rightLegHole3El, S3_RIGHT_HOLE_POS);
+  eggSetPosWithRot(leftLegPivot3El, S3_LEFT_LEG_PIVOT_POS, 0);
+  eggSetPosWithRot(rightLegPivot3El, S3_RIGHT_LEG_PIVOT_POS, 0);
+  eggSetPos(leftLeg3El, S3_LEFT_LEG_IMG_OFFSET);
+  eggSetPos(rightLeg3El, S3_RIGHT_LEG_IMG_OFFSET);
+  eggSetPosWithRot(leftWingPivot3El, S3_LEFT_WING_PIVOT_POS, 0);
+  eggSetPosWithRot(rightWingPivot3El, S3_RIGHT_WING_PIVOT_POS, 0);
+  eggSetPos(leftWing3El, S3_LEFT_WING_IMG_OFFSET);
+  eggSetPos(rightWing3El, S3_RIGHT_WING_IMG_OFFSET);
+
+  bodyImg3El.src = EGG_BASE + "birdout_bird/birdout_nohand.png";
+  eyes3El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+  shell3El.src = EGG_BASE + "birdout_shell/eggshell_bottom.png";
+  leftLegHole3El.src = EGG_BASE + "birdout_stage3/leftleg_hole.png";
+  rightLegHole3El.src = EGG_BASE + "birdout_stage3/rightleg_hole.png";
+  leftLeg3El.src = EGG_BASE + "birdout_stage3/left_leg.png";
+  rightLeg3El.src = EGG_BASE + "birdout_stage3/right_leg.png";
+  leftWing3El.src = EGG_BASE + "birdout_stage3/left_wing.png";
+  rightWing3El.src = EGG_BASE + "birdout_stage3/right_wing.png";
+
+  // Rotation pivots: left wing pivots from its left-middle edge, right wing
+  // from its right-middle edge. Legs pivot from the bottom-middle of the foot
+  // (not the top/toe-tip). The whole-bird wobble (pivot3) pivots from the
+  // bottom-middle of the shell, pushed another 25px further down so it sits
+  // below the shell's edge rather than right on it.
+  setPivotOriginOnImage(leftWingPivot3El, leftWing3El, S3_LEFT_WING_IMG_OFFSET, "left-mid");
+  setPivotOriginOnImage(rightWingPivot3El, rightWing3El, S3_RIGHT_WING_IMG_OFFSET, "right-mid");
+  setPivotOriginOnImage(leftLegPivot3El, leftLeg3El, S3_LEFT_LEG_IMG_OFFSET, "bottom-mid");
+  setPivotOriginOnImage(rightLegPivot3El, rightLeg3El, S3_RIGHT_LEG_IMG_OFFSET, "bottom-mid");
+  setPivotOriginOnImage(pivot3El, shell3El, S3_SHELL_POS, "bottom-mid", 25);
+
+  // Calibration build: starts already emerged (holes visible, legs full size)
+  // instead of the tiny/hidden pre-crack state, and doesn't auto-play the
+  // crack sequence — so the pose that actually needs calibrating holds still
+  // the moment you switch to this stage.
+  leftLegHole3El.style.opacity = "1";
+  rightLegHole3El.style.opacity = "1";
+  leftLegPivot3El.style.display = "block";
+  rightLegPivot3El.style.display = "block";
+  s3_legsOut = true;
+
+  eggStatus3El.textContent = "idle (static pose — use Play to see the crack sequence)";
+}
+
+let s3_hatchStarted = false;
+function playEgg3Hatch(){
+  if (s3_hatchStarted) return;
+  s3_hatchStarted = true;
+  // reset to the pre-crack state before playing, since Ready() now starts emerged
+  leftLegHole3El.style.transition = "none";
+  rightLegHole3El.style.transition = "none";
+  leftLegHole3El.style.opacity = "0";
+  rightLegHole3El.style.opacity = "0";
+  leftLegPivot3El.style.display = "none";
+  rightLegPivot3El.style.display = "none";
+  eggSetPos(leftLeg3El, [S3_LEFT_LEG_IMG_OFFSET[0], S3_LEFT_LEG_IMG_OFFSET[1]]);
+  eggSetPos(rightLeg3El, [S3_RIGHT_LEG_IMG_OFFSET[0], S3_RIGHT_LEG_IMG_OFFSET[1]]);
+  leftLeg3El.style.transform += " scale(0.05)";
+  rightLeg3El.style.transform += " scale(0.05)";
+  s3_legsOut = false;
+  eggStatus3El.textContent = "hatching...";
+  egg3Sequence();
+}
+
+async function egg3Sequence(){
+  await egg3CrackHoles();
+  await egg3LegsEmerge();
+  eggStatus3El.textContent = "legs out";
+
+  egg3StartBlinkAndExpression();
+  egg3StartRandomWingFlap();
+  egg3StartRandomLegsOpenClose();
+  egg3StartRandomBirdWobble();
+}
+
+// Strong/fast pre-crack wobble
+async function egg3WobbleShell(){
+  const steps = [[14,90],[-12,110],[8,90],[0,80]];
+  for (const [deg, dur] of steps) await eggRotateTween(pivot3El, deg, dur, egg3IsPaused);
+}
+
+async function egg3CrackHoles(){
+  await egg3WobbleShell();
+  leftLegHole3El.style.transition = "opacity 0.6s ease-in-out";
+  leftLegHole3El.style.opacity = "1";
+  await sleep(600);
+
+  await sleep(300);
+
+  await egg3WobbleShell();
+  rightLegHole3El.style.transition = "opacity 0.6s ease-in-out";
+  rightLegHole3El.style.opacity = "1";
+  await sleep(600);
+}
+
+async function egg3LegsEmerge(){
+  leftLegPivot3El.style.display = "block";
+  rightLegPivot3El.style.display = "block";
+
+  await Promise.all([
+    egg3ScaleTween(leftLeg3El, 0.05, 1, 900),
+    egg3ScaleTween(rightLeg3El, 0.05, 1, 900)
+  ]);
+  s3_legsOut = true;
+}
+
+// Same pause-and-resume-smoothly pattern as the rotate/rise tweens elsewhere.
+function egg3ScaleTween(el, from, to, duration){
+  return new Promise(resolve => {
+    const baseTransform = el.style.transform.replace(/scale\([^)]*\)/, "");
+    let start = null;
+    let pausedSince = null;
+    function step(now){
+      if (start === null) start = now;
+      if (egg3IsPaused()){
+        pausedSince = pausedSince || now;
+        requestAnimationFrame(step);
+        return;
+      }
+      if (pausedSince){ start += (now - pausedSince); pausedSince = null; }
+      const t = Math.min((now - start) / duration, 1);
+      const s = from + (to - from) * t;
+      el.style.transform = baseTransform + ` scale(${s})`;
+      if (t < 1) requestAnimationFrame(step);
+      else resolve();
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+// Wings — random ~3s bursts, skipped while sad or paused
+async function egg3StartRandomWingFlap(){
+  while (true){
+    await sleep((5 + Math.random()*5) * 1000);
+    if (!egg3IsPaused() && s3_currentExpression !== "sad") await egg3WingFlapBurst();
+  }
+}
+async function egg3WingFlapBurst(){
+  // Synchronous: both wings move up together, then down together, at the same
+  // speed. Using Promise.all so the right side actually starts at the same
+  // moment as the left instead of waiting for it to finish first (awaiting
+  // them one after another, even with matching durations, is sequential, not
+  // simultaneous).
+  const end = performance.now() + 3000;
+  while (performance.now() < end){
+    if (egg3IsPaused()){ await sleep(150); continue; }
+    await Promise.all([
+      eggRotateTween(leftWingPivot3El, -20, 400, egg3IsPaused),
+      eggRotateTween(rightWingPivot3El, -20, 400, egg3IsPaused),
+    ]);
+    await Promise.all([
+      eggRotateTween(leftWingPivot3El, 0, 400, egg3IsPaused),
+      eggRotateTween(rightWingPivot3El, 0, 400, egg3IsPaused),
+    ]);
+  }
+  await Promise.all([
+    eggRotateTween(leftWingPivot3El, 0, 200, egg3IsPaused),
+    eggRotateTween(rightWingPivot3El, 0, 200, egg3IsPaused),
+  ]);
+}
+
+// Legs — random ~3s bursts, mirrored, skipped while sad or paused
+async function egg3StartRandomLegsOpenClose(){
+  while (true){
+    await sleep((5 + Math.random()*5) * 1000);
+    if (!egg3IsPaused() && s3_legsOut && s3_currentExpression !== "sad") await egg3LegsOpenCloseBurst();
+  }
+}
+async function egg3LegsOpenCloseBurst(){
+  // Mirrored: left leg swings right, right leg swings left (both moving
+  // toward the center), started simultaneously via Promise.all — not one
+  // waiting for the other to finish first.
+  const end = performance.now() + 3000;
+  while (performance.now() < end){
+    if (egg3IsPaused()){ await sleep(150); continue; }
+    await Promise.all([
+      eggRotateTween(leftLegPivot3El, -12, 300, egg3IsPaused),
+      eggRotateTween(rightLegPivot3El, 12, 300, egg3IsPaused),
+    ]);
+    await Promise.all([
+      eggRotateTween(leftLegPivot3El, 0, 300, egg3IsPaused),
+      eggRotateTween(rightLegPivot3El, 0, 300, egg3IsPaused),
+    ]);
+  }
+  await Promise.all([
+    eggRotateTween(leftLegPivot3El, 0, 200, egg3IsPaused),
+    eggRotateTween(rightLegPivot3El, 0, 200, egg3IsPaused),
+  ]);
+}
+
+// Whole-bird gentle wobble, random timing
+async function egg3StartRandomBirdWobble(){
+  while (true){
+    await sleep((4 + Math.random()*4) * 1000);
+    if (!egg3IsPaused()){
+      await eggRotateTween(pivot3El, 4, 150, egg3IsPaused);
+      await eggRotateTween(pivot3El, -3, 200, egg3IsPaused);
+      await eggRotateTween(pivot3El, 0, 150, egg3IsPaused);
+    }
+  }
+}
+
+// Eyes — same blink/expression pattern as stages 1/2, tracks expression for gating
+function egg3StartBlinkAndExpression(){
+  egg3ScheduleBlink();
+  egg3ScheduleExpression();
+}
+async function egg3ScheduleBlink(){
+  await sleep(5000);
+  if (!egg3IsPaused() && !s3_isExpressing) await egg3DoBlink();
+  egg3ScheduleBlink();
+}
+async function egg3DoBlink(){
+  s3_isBlinking = true;
+  const frames = ["0","1","2","3","2","1","0"];
+  for (const f of frames){
+    eyes3El.src = EGG_BASE + `birdout_eye/eye_normal_front_${f}.png`;
+    await sleep(50);
+  }
+  s3_isBlinking = false;
+  eyes3El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+}
+async function egg3ScheduleExpression(){
+  await sleep((6 + Math.random()*6) * 1000);
+  if (!egg3IsPaused() && !s3_isBlinking) await egg3DoExpression();
+  egg3ScheduleExpression();
+}
+async function egg3DoExpression(){
+  s3_isExpressing = true;
+  const choices = ["angry","happy","sad"];
+  const choice = choices[Math.floor(Math.random()*choices.length)];
+  s3_currentExpression = choice;
+  if (choice === "angry"){
+    eyes3El.src = EGG_BASE + "birdout_eye/eye_angry_front_0.png"; await sleep(300);
+    eyes3El.src = EGG_BASE + "birdout_eye/eye_angry_front_1.png"; await sleep(1000);
+  } else if (choice === "happy"){
+    eyes3El.src = EGG_BASE + "birdout_eye/eye_happy_front_0.png"; await sleep(1500);
+  } else {
+    for (let i = 0; i <= 6; i++){
+      eyes3El.src = EGG_BASE + `birdout_eye/eye_sad_front_${i}.png`;
+      await sleep(150);
+    }
+  }
+  s3_isExpressing = false;
+  s3_currentExpression = "normal";
+  eyes3El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+}
+
+/* ============================================================
+   EGG STAGE 4 — shell cracks in two texture-swap steps, then a fast
+   shake, legs instantly grow, four shell pieces + a middle piece
+   reveal, fall apart, sit on the ground, then fade away — after
+   which the legs start raising randomly, one at a time.
+
+   Asset note: the handoff's Godot animation names (Left_idle,
+   raiseL, Left_idle_grown, raiseL_grown, ...) don't match what's
+   actually on disk. What exists is bird/birdout_leg/{left,right}leg_
+   {up,grown}_{0,1,2}.png — three-frame sequences, no distinct
+   raise-vs-idle split. Mapped here as: frame 0 = idle (held style),
+   0→1→2→1→0 = the raise cycle, "up" = not-grown, "grown" = grown.
+   Flag it if that's not the intended mapping.
+
+   Calibration build note: like Stage 3, this starts in a static pose
+   with everything visible at once (pre-crack shells AND the fallen-
+   apart pieces AND both leg states overlaid) rather than the true
+   sequence, so every part is reachable for calibration without
+   waiting through "Play hatch animation". Positions below are the
+   handoff's confirmed values as given, used directly — they're
+   already in this file's small-offset-from-pivot coordinate system
+   (unlike Stage 3's original numbers, no rescaling needed here).
+   pivot4's own base screen position (579, 540) in the handoff looks
+   like a raw canvas coordinate inconsistent with how every other
+   stage here is anchored (left:50%/top:55% + small offsets) — used
+   that same left:50%/top:55% convention instead; flag if 579,540
+   needs to be honored literally.
+   ============================================================ */
+
+const pivot4El               = document.getElementById("pivot4");
+const backShell4El           = document.getElementById("backShell4");
+const leftBackShellPivot4El  = document.getElementById("leftBackShellPivot4");
+const leftBackShell4El       = document.getElementById("leftBackShell4");
+const rightBackShellPivot4El = document.getElementById("rightBackShellPivot4");
+const rightBackShell4El      = document.getElementById("rightBackShell4");
+const body4El                = document.getElementById("body4");
+const eyes4El                = document.getElementById("eyes4");
+const frontShell4El          = document.getElementById("frontShell4");
+const leftFrontShellPivot4El = document.getElementById("leftFrontShellPivot4");
+const leftFrontShell4El      = document.getElementById("leftFrontShell4");
+const rightFrontShellPivot4El= document.getElementById("rightFrontShellPivot4");
+const rightFrontShell4El     = document.getElementById("rightFrontShell4");
+const middleShell4El         = document.getElementById("middleShell4");
+const leftLeg4El             = document.getElementById("leftLeg4");
+const rightLeg4El            = document.getElementById("rightLeg4");
+const eggStatus4El           = document.getElementById("eggStatus4");
+
+// Calibrated positions (all relative to pivot4)
+const S4_BACK_SHELL_POS             = [-4, -181];
+const S4_RIGHT_BACK_SHELL_PIVOT_POS = [-17, -8];
+const S4_RIGHT_BACK_SHELL_OFFSET    = [-53, -120];
+const S4_LEFT_BACK_SHELL_PIVOT_POS  = [-16, -11];
+const S4_LEFT_BACK_SHELL_OFFSET     = [56, -110];
+const S4_BODY_POS                   = [-7, -174];
+const S4_EYES_POS                   = [-7, -161];
+const S4_FRONT_SHELL_POS            = [-10, -95];
+const S4_LEFT_FRONT_SHELL_PIVOT_POS = [22, -8];
+const S4_LEFT_FRONT_SHELL_OFFSET    = [22, -77];
+const S4_RIGHT_FRONT_SHELL_PIVOT_POS= [-44, -13];
+const S4_RIGHT_FRONT_SHELL_OFFSET   = [-27, -81];
+
+// Fall trajectory keyframes (start -> mid -> final), calibrated for a natural
+// arc instead of a single straight-line tween.
+const S4_LEFT_BACK_SHELL_PIVOT_MID    = [128, -4];
+const S4_LEFT_BACK_SHELL_PIVOT_FINAL  = [239, 33];
+const S4_LEFT_FRONT_SHELL_PIVOT_MID   = [158, 2];
+const S4_LEFT_FRONT_SHELL_PIVOT_FINAL = [238, 64];
+const S4_RIGHT_BACK_SHELL_PIVOT_MID    = [-153, -7];
+const S4_RIGHT_BACK_SHELL_PIVOT_FINAL  = [-261, 31];
+const S4_RIGHT_FRONT_SHELL_PIVOT_MID   = [-180, -2];
+const S4_RIGHT_FRONT_SHELL_PIVOT_FINAL = [-264, 60];
+const S4_MIDDLE_SHELL_POS           = [-3, 79];
+const S4_LEFT_LEG_POS_UP     = [62, 9];
+const S4_RIGHT_LEG_POS_UP    = [-85, 7];
+const S4_LEFT_LEG_POS_GROWN  = [68, -30];
+const S4_RIGHT_LEG_POS_GROWN = [-74, -30];
+
+let s4_currentExpression = "normal";
+let s4_isBlinking = false, s4_isExpressing = false;
+let s4_usingGrownLegs = false;
+let s4Paused = false;       // true while calibrating egg stage 4
+let s4ManualPaused = false; // true while the standalone Pause button is active
+function egg4IsPaused(){ return s4Paused || s4ManualPaused; }
+function toggleEgg4Pause(){
+  s4ManualPaused = !s4ManualPaused;
+  document.getElementById("egg4PauseBtn").textContent = s4ManualPaused ? "Resume" : "Pause";
+}
+
+// Opacity tween, same pause-and-resume-smoothly pattern as the other tweens here.
+function eggFadeTween(el, from, to, duration, isPausedFn){
+  return new Promise(resolve => {
+    let start = null, pausedSince = null;
+    function step(now){
+      if (start === null) start = now;
+      if (isPausedFn && isPausedFn()){
+        pausedSince = pausedSince || now;
+        requestAnimationFrame(step);
+        return;
+      }
+      if (pausedSince){ start += (now - pausedSince); pausedSince = null; }
+      const t = Math.min((now - start) / duration, 1);
+      el.style.opacity = from + (to - from) * t;
+      if (t < 1) requestAnimationFrame(step);
+      else resolve();
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+// Combined position + rotation tween with separate easing curves for x (ease-out)
+// and y/rotation (ease-in) — matches the fall's asymmetric motion (X eases out
+// like it's being flung, Y+rotation ease in like gravity taking over).
+function eggFallTween(el, fromXY, toXY, fromDeg, toDeg, duration, isPausedFn){
+  return new Promise(resolve => {
+    let start = null, pausedSince = null;
+    function easeOut(t){ return 1 - Math.pow(1 - t, 2); }
+    function easeIn(t){ return t * t; }
+    function step(now){
+      if (start === null) start = now;
+      if (isPausedFn && isPausedFn()){
+        pausedSince = pausedSince || now;
+        requestAnimationFrame(step);
+        return;
+      }
+      if (pausedSince){ start += (now - pausedSince); pausedSince = null; }
+      const t = Math.min((now - start) / duration, 1);
+      const x = fromXY[0] + (toXY[0] - fromXY[0]) * easeOut(t);
+      const y = fromXY[1] + (toXY[1] - fromXY[1]) * easeIn(t);
+      const deg = fromDeg + (toDeg - fromDeg) * easeIn(t);
+      eggSetPosWithRot(el, [x, y], deg);
+      if (t < 1) requestAnimationFrame(step);
+      else resolve();
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+function egg4Ready(){
+  eggSetPos(backShell4El, S4_BACK_SHELL_POS);
+  eggSetPosWithRot(leftBackShellPivot4El, S4_LEFT_BACK_SHELL_PIVOT_POS, 0);
+  eggSetPos(leftBackShell4El, S4_LEFT_BACK_SHELL_OFFSET);
+  eggSetPosWithRot(rightBackShellPivot4El, S4_RIGHT_BACK_SHELL_PIVOT_POS, 0);
+  eggSetPos(rightBackShell4El, S4_RIGHT_BACK_SHELL_OFFSET);
+  eggSetPos(body4El, S4_BODY_POS);
+  eggSetPos(eyes4El, S4_EYES_POS);
+  eggSetPos(frontShell4El, S4_FRONT_SHELL_POS);
+  eggSetPosWithRot(leftFrontShellPivot4El, S4_LEFT_FRONT_SHELL_PIVOT_POS, 0);
+  eggSetPos(leftFrontShell4El, S4_LEFT_FRONT_SHELL_OFFSET);
+  eggSetPosWithRot(rightFrontShellPivot4El, S4_RIGHT_FRONT_SHELL_PIVOT_POS, 0);
+  eggSetPos(rightFrontShell4El, S4_RIGHT_FRONT_SHELL_OFFSET);
+  eggSetPos(middleShell4El, S4_MIDDLE_SHELL_POS);
+  eggSetPos(leftLeg4El, S4_LEFT_LEG_POS_UP);
+  eggSetPos(rightLeg4El, S4_RIGHT_LEG_POS_UP);
+
+  backShell4El.src = EGG_BASE + "birdout_shell/cracking_backshell_0.png";
+  frontShell4El.src = EGG_BASE + "birdout_shell/cracking_frontshell_0.png";
+  leftBackShell4El.src = EGG_BASE + "birdout_shell/crackleftbackshell.png";
+  rightBackShell4El.src = EGG_BASE + "birdout_shell/crackrightbackshell.png";
+  leftFrontShell4El.src = EGG_BASE + "birdout_shell/crackleftfrontshell.png";
+  rightFrontShell4El.src = EGG_BASE + "birdout_shell/crackrightfrontshell.png";
+  middleShell4El.src = EGG_BASE + "birdout_shell/crackmiddleshell.png";
+  body4El.src = EGG_BASE + "birdout_bird/birdout_bird.png";
+  eyes4El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+  leftLeg4El.src = EGG_BASE + "birdout_leg/leftleg_up_0.png";
+  rightLeg4El.src = EGG_BASE + "birdout_leg/rightleg_up_0.png";
+
+  // Matches the real sequence's starting visibility: only the pre-crack
+  // BackShell/FrontShell are shown. The four crack pieces + MiddleShell stay
+  // hidden until the shake — they're only visible during "Calibrate positions"
+  // (see toggleEggCalibration) or after "Play hatch animation" reaches that point.
+  egg4HideCrackPieces();
+
+  eggStatus4El.textContent = "idle (static pose — use Play to see the crack sequence)";
+}
+
+function egg4HideCrackPieces(){
+  [leftBackShellPivot4El, rightBackShellPivot4El, leftFrontShellPivot4El, rightFrontShellPivot4El, middleShell4El]
+    .forEach(el => { el.style.display = "none"; el.style.opacity = "0"; });
+}
+function egg4ShowCrackPieces(){
+  [leftBackShellPivot4El, rightBackShellPivot4El, leftFrontShellPivot4El, rightFrontShellPivot4El, middleShell4El]
+    .forEach(el => { el.style.display = "block"; el.style.opacity = "1"; });
+}
+
+let s4_hatchStarted = false;
+function playEgg4Hatch(){
+  if (s4_hatchStarted) return;
+  s4_hatchStarted = true;
+  // reset to the pre-crack state before playing
+  backShell4El.style.display = "block";
+  frontShell4El.style.display = "block";
+  backShell4El.src = EGG_BASE + "birdout_shell/cracking_backshell_0.png";
+  frontShell4El.src = EGG_BASE + "birdout_shell/cracking_frontshell_0.png";
+  egg4HideCrackPieces();
+  eggSetPosWithRot(leftBackShellPivot4El, S4_LEFT_BACK_SHELL_PIVOT_POS, 0);
+  eggSetPosWithRot(rightBackShellPivot4El, S4_RIGHT_BACK_SHELL_PIVOT_POS, 0);
+  eggSetPosWithRot(leftFrontShellPivot4El, S4_LEFT_FRONT_SHELL_PIVOT_POS, 0);
+  eggSetPosWithRot(rightFrontShellPivot4El, S4_RIGHT_FRONT_SHELL_PIVOT_POS, 0);
+  s4_usingGrownLegs = false;
+  eggSetPos(leftLeg4El, S4_LEFT_LEG_POS_UP);
+  eggSetPos(rightLeg4El, S4_RIGHT_LEG_POS_UP);
+  leftLeg4El.src = EGG_BASE + "birdout_leg/leftleg_up_0.png";
+  rightLeg4El.src = EGG_BASE + "birdout_leg/rightleg_up_0.png";
+  leftLeg4El.style.zIndex = "";
+  rightLeg4El.style.zIndex = "";
+  eggStatus4El.textContent = "hatching...";
+  egg4Sequence();
+}
+
+async function egg4Sequence(){
+  // Blink/expression run in parallel with the whole crack sequence, starting
+  // immediately (matches the handoff spec) rather than waiting for the legs
+  // to free up.
+  egg4StartBlinkAndExpression();
+
+  await sleep(1500);
+  backShell4El.src = EGG_BASE + "birdout_shell/cracking_backshell_1.png";
+  frontShell4El.src = EGG_BASE + "birdout_shell/cracking_frontshell_1.png";
+
+  await sleep(1500);
+  await egg4FinalCrackAndFall();
+}
+
+// Fast small shake — 4 quick steps
+async function egg4FastSmallShake(){
+  const steps = [[5,120],[-4,140],[2,120],[0,120]];
+  for (const [deg, dur] of steps) await eggRotateTween(pivot4El, deg, dur, egg4IsPaused);
+}
+
+function egg4SwitchToGrownLegs(){
+  s4_usingGrownLegs = true;
+  eggSetPos(leftLeg4El, S4_LEFT_LEG_POS_GROWN);
+  eggSetPos(rightLeg4El, S4_RIGHT_LEG_POS_GROWN);
+  leftLeg4El.src = EGG_BASE + "birdout_leg/leftleg_grown_0.png";
+  rightLeg4El.src = EGG_BASE + "birdout_leg/rightleg_grown_0.png";
+  // reordered to draw behind Body (z-index 3), matching the Godot script's
+  // explicit move_child(..., Body.get_index()) call
+  leftLeg4El.style.zIndex = "2";
+  rightLeg4El.style.zIndex = "2";
+}
+
+// Chains two eggFallTween segments (start->mid, mid->final) so the piece
+// follows a 3-point arc instead of a single straight-line tween. Rotation
+// interpolates the same way, split across both segments.
+async function egg4FallPiece(el, startXY, midXY, finalXY, startDeg, midDeg, finalDeg){
+  await eggFallTween(el, startXY, midXY, startDeg, midDeg, 350, egg4IsPaused);
+  await eggFallTween(el, midXY, finalXY, midDeg, finalDeg, 350, egg4IsPaused);
+}
+
+async function egg4FinalCrackAndFall(){
+  await egg4FastSmallShake();
+  egg4SwitchToGrownLegs(); // instant, no tween — matches the handoff spec exactly
+
+  backShell4El.style.display = "none";
+  frontShell4El.style.display = "none";
+  const pieces = [leftBackShellPivot4El, rightBackShellPivot4El, leftFrontShellPivot4El, rightFrontShellPivot4El, middleShell4El];
+  pieces.forEach(el => { el.style.display = "block"; el.style.opacity = "0"; });
+
+  await Promise.all(pieces.map(el => eggFadeTween(el, 0, 1, 300, egg4IsPaused)));
+
+  await sleep(300);
+
+  // Fall trajectory: start -> mid -> final, two chained tweens per piece
+  // (rather than one straight-line tween) for a more natural fall arc.
+  await Promise.all([
+    egg4FallPiece(leftBackShellPivot4El, S4_LEFT_BACK_SHELL_PIVOT_POS, S4_LEFT_BACK_SHELL_PIVOT_MID, S4_LEFT_BACK_SHELL_PIVOT_FINAL, 0, 45, 90),
+    egg4FallPiece(leftFrontShellPivot4El, S4_LEFT_FRONT_SHELL_PIVOT_POS, S4_LEFT_FRONT_SHELL_PIVOT_MID, S4_LEFT_FRONT_SHELL_PIVOT_FINAL, 0, 45, 90),
+    egg4FallPiece(rightBackShellPivot4El, S4_RIGHT_BACK_SHELL_PIVOT_POS, S4_RIGHT_BACK_SHELL_PIVOT_MID, S4_RIGHT_BACK_SHELL_PIVOT_FINAL, 0, -45, -90),
+    egg4FallPiece(rightFrontShellPivot4El, S4_RIGHT_FRONT_SHELL_PIVOT_POS, S4_RIGHT_FRONT_SHELL_PIVOT_MID, S4_RIGHT_FRONT_SHELL_PIVOT_FINAL, 0, -45, -90),
+  ]);
+
+  await sleep(3000);
+
+  await Promise.all(pieces.map(el => eggFadeTween(el, 1, 0, 600, egg4IsPaused)));
+  pieces.forEach(el => { el.style.display = "none"; });
+
+  eggStatus4El.textContent = "legs free — random raises";
+  egg4StartRandomLegRaise();
+}
+
+// Legs don't have a distinct raise-vs-idle asset split (see note above) — cycles
+// frame 0→1→2→1→0 across `duration`, polling the pause flag between frames.
+async function egg4LegRaiseFrames(imgEl, prefix, duration, isPausedFn){
+  const sequence = [0, 1, 2, 1, 0];
+  const stepMs = duration / sequence.length;
+  for (const f of sequence){
+    while (isPausedFn && isPausedFn()) await sleep(100);
+    imgEl.src = `${EGG_BASE}birdout_leg/${prefix}_${f}.png`;
+    await sleep(stepMs);
+  }
+}
+
+// Fixed 0.5s duration (not tied to an animation-finished event) — the handoff
+// explicitly calls this out as a deliberate fix for a hang bug in the Godot
+// version, so ported the same way here.
+const EGG4_LEG_RAISE_DURATION = 500;
+
+async function egg4LegRaiseLoop(){
+  const rPrefix = s4_usingGrownLegs ? "rightleg_grown" : "rightleg_up";
+  const lPrefix = s4_usingGrownLegs ? "leftleg_grown" : "leftleg_up";
+
+  eggRotateTween(pivot4El, 6, 150, egg4IsPaused); // fire-and-forget, like the Godot tween
+  await egg4LegRaiseFrames(rightLeg4El, rPrefix, EGG4_LEG_RAISE_DURATION, egg4IsPaused);
+  rightLeg4El.src = `${EGG_BASE}birdout_leg/${rPrefix}_0.png`;
+  await eggRotateTween(pivot4El, 0, 150, egg4IsPaused);
+
+  await sleep(200);
+
+  eggRotateTween(pivot4El, -6, 150, egg4IsPaused);
+  await egg4LegRaiseFrames(leftLeg4El, lPrefix, EGG4_LEG_RAISE_DURATION, egg4IsPaused);
+  leftLeg4El.src = `${EGG_BASE}birdout_leg/${lPrefix}_0.png`;
+  await eggRotateTween(pivot4El, 0, 150, egg4IsPaused);
+}
+
+async function egg4StartRandomLegRaise(){
+  while (true){
+    await sleep((4 + Math.random()*4) * 1000);
+    if (!egg4IsPaused() && s4_currentExpression !== "sad") await egg4LegRaiseLoop();
+  }
+}
+
+// Eyes — same blink/expression pattern as prior stages
+function egg4StartBlinkAndExpression(){
+  egg4ScheduleBlink();
+  egg4ScheduleExpression();
+}
+async function egg4ScheduleBlink(){
+  await sleep(5000);
+  if (!egg4IsPaused() && !s4_isExpressing) await egg4DoBlink();
+  egg4ScheduleBlink();
+}
+async function egg4DoBlink(){
+  s4_isBlinking = true;
+  const frames = ["0","1","2","3","2","1","0"];
+  for (const f of frames){
+    eyes4El.src = EGG_BASE + `birdout_eye/eye_normal_front_${f}.png`;
+    await sleep(50);
+  }
+  s4_isBlinking = false;
+  eyes4El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+}
+async function egg4ScheduleExpression(){
+  await sleep((6 + Math.random()*6) * 1000);
+  if (!egg4IsPaused() && !s4_isBlinking) await egg4DoExpression();
+  egg4ScheduleExpression();
+}
+async function egg4DoExpression(){
+  s4_isExpressing = true;
+  const choices = ["angry","happy","sad"];
+  const choice = choices[Math.floor(Math.random()*choices.length)];
+  s4_currentExpression = choice;
+  if (choice === "angry"){
+    eyes4El.src = EGG_BASE + "birdout_eye/eye_angry_front_0.png"; await sleep(300);
+    eyes4El.src = EGG_BASE + "birdout_eye/eye_angry_front_1.png"; await sleep(1000);
+  } else if (choice === "happy"){
+    eyes4El.src = EGG_BASE + "birdout_eye/eye_happy_front_0.png"; await sleep(1500);
+  } else {
+    for (let i = 0; i <= 6; i++){
+      eyes4El.src = EGG_BASE + `birdout_eye/eye_sad_front_${i}.png`;
+      await sleep(150);
+    }
+  }
+  s4_isExpressing = false;
+  s4_currentExpression = "normal";
+  eyes4El.src = EGG_BASE + "birdout_eye/eye_normal_front_0.png";
+}
+
+/* ============================================================
+   CALIBRATION MODE (EGG STAGES) — same drag-to-find-offset idea as
+   the adult bird, generalized across both egg scenes. Each part's
+   readout gives [x, y] in the same coordinate space eggSetPos/
+   eggSetPosWithRot expect, ready to paste back into egg1Ready()/
+   egg2Ready(). The egg's own pivot elements (eggshellTopPivot1/2,
+   which also carry rotation) keep their current rotation untouched
+   while you drag their position.
+   ============================================================ */
+const EGG_CALIB = {
+  egg1: {
+    parts: {
+      eggshellBack1: eggBack1El,
+      birdBody1: birdBody1El,
+      eggEyes1: eggEyes1El,
+      eggshellTopPivot1: eggTopPivot1El,
+      eggshellBottom1: eggBottom1El,
+    },
+    btnId: "eggCalibBtn1",
+    readoutId: "eggCalibReadout1",
+    active: false,
+  },
+  egg2: {
+    parts: {
+      eggshellBack2: eggBack2El,
+      birdBody2: birdBody2El,
+      eggEyes2: eggEyes2El,
+      handL2: handL2El,
+      handR2: handR2El,
+      eggshellTopPivot2: eggTopPivot2El,
+      eggshellBottom2: eggBottom2El,
+    },
+    btnId: "eggCalibBtn2",
+    readoutId: "eggCalibReadout2",
+    active: false,
+  },
+  egg3: {
+    parts: {
+      shell3: shell3El,
+      leftLegHole3: leftLegHole3El,
+      rightLegHole3: rightLegHole3El,
+      leftLegPivot3: leftLegPivot3El,
+      rightLegPivot3: rightLegPivot3El,
+      leftLeg3: leftLeg3El,
+      rightLeg3: rightLeg3El,
+      leftWingPivot3: leftWingPivot3El,
+      rightWingPivot3: rightWingPivot3El,
+      leftWing3: leftWing3El,
+      rightWing3: rightWing3El,
+    },
+    btnId: "eggCalibBtn3",
+    readoutId: "eggCalibReadout3",
+    active: false,
+  },
+  egg4: {
+    parts: {
+      backShell4: backShell4El,
+      leftBackShellPivot4: leftBackShellPivot4El,
+      leftBackShell4: leftBackShell4El,
+      rightBackShellPivot4: rightBackShellPivot4El,
+      rightBackShell4: rightBackShell4El,
+      body4: body4El,
+      eyes4: eyes4El,
+      frontShell4: frontShell4El,
+      leftFrontShellPivot4: leftFrontShellPivot4El,
+      leftFrontShell4: leftFrontShell4El,
+      rightFrontShellPivot4: rightFrontShellPivot4El,
+      rightFrontShell4: rightFrontShell4El,
+      middleShell4: middleShell4El,
+      leftLeg4: leftLeg4El,
+      rightLeg4: rightLeg4El,
+    },
+    btnId: "eggCalibBtn4",
+    readoutId: "eggCalibReadout4",
+    active: false,
+  },
+};
+
+// A part carries its own rotation (dataset.rot set via eggSetPosWithRot) only
+// for the shell-top pivots — drag those without disturbing their current tilt.
+function eggCalibApplyXY(el, xy){
+  if (el.dataset.rot !== undefined){
+    eggSetPosWithRot(el, xy, parseFloat(el.dataset.rot));
+  } else {
+    eggSetPos(el, xy);
+  }
+}
+
+function toggleEggCalibration(ctxKey){
+  const ctx = EGG_CALIB[ctxKey];
+  ctx.active = !ctx.active;
+  if (ctxKey === "egg1") s1Paused = ctx.active;
+  if (ctxKey === "egg2") s2Paused = ctx.active;
+  if (ctxKey === "egg3") s3Paused = ctx.active;
+  if (ctxKey === "egg4") s4Paused = ctx.active;
+
+  document.getElementById(ctx.btnId).textContent = ctx.active ? "Exit calibration" : "Calibrate positions";
+  const readoutEl = document.getElementById(ctx.readoutId);
+  readoutEl.style.display = ctx.active ? "block" : "none";
+
+  for (const name in ctx.parts){
+    const el = ctx.parts[name];
+    el.style.pointerEvents = ctx.active ? "auto" : "none";
+    el.style.cursor = ctx.active ? "grab" : "default";
+    el.style.outline = ctx.active ? "2px dashed rgba(255,0,0,0.6)" : "none";
+  }
+
+  if (ctx.active){
+    // freeze mid-shake/wobble rotation so the pose holds still while you drag
+    const pivotEl = { egg1: eggPivot1El, egg2: eggPivot2El, egg3: pivot3El, egg4: pivot4El }[ctxKey];
+    pivotEl.dataset.rot = 0;
+    pivotEl.style.transform = pivotEl.style.transform.replace(/rotate\([^)]*\)/, "") + " rotate(0deg)";
+    readoutEl.textContent = "drag a part";
+  }
+
+  // Stage 4's four crack pieces + MiddleShell are hidden by default (matching
+  // the real sequence's starting visibility) — reveal them just for dragging
+  // while calibrating, then hide them again on exit (unless "Play hatch
+  // animation" has already run and left them in a mid-sequence state).
+  if (ctxKey === "egg4" && !s4_hatchStarted){
+    if (ctx.active) egg4ShowCrackPieces();
+    else egg4HideCrackPieces();
+  }
+}
+
+let eggDragCtx = null;
+let eggDragTarget = null;
+let eggDragStart = {x:0, y:0};
+let eggDragOrigin = [0,0];
+
+function startEggDrag(ctxKey, name, ev){
+  const ctx = EGG_CALIB[ctxKey];
+  if (!ctx.active) return;
+  eggDragCtx = ctxKey;
+  eggDragTarget = name;
+  eggDragStart = {x: ev.clientX, y: ev.clientY};
+  eggDragOrigin = getOffset(ctx.parts[name]);
+  ev.preventDefault();
+}
+
+function onEggDragMove(ev){
+  if (!eggDragTarget) return;
+  const ctx = EGG_CALIB[eggDragCtx];
+  const dx = ev.clientX - eggDragStart.x; // egg scenes aren't scaled, so 1:1 px
+  const dy = ev.clientY - eggDragStart.y;
+  const newX = Math.round(eggDragOrigin[0] + dx);
+  const newY = Math.round(eggDragOrigin[1] + dy);
+  const el = ctx.parts[eggDragTarget];
+  eggCalibApplyXY(el, [newX, newY]);
+  document.getElementById(ctx.readoutId).textContent = `${eggDragTarget}: [${newX}, ${newY}]`;
+}
+
+function endEggDrag(){ eggDragTarget = null; eggDragCtx = null; }
+
+for (const ctxKey in EGG_CALIB){
+  const ctx = EGG_CALIB[ctxKey];
+  for (const name in ctx.parts){
+    ctx.parts[name].addEventListener("pointerdown", (ev) => startEggDrag(ctxKey, name, ev));
+  }
+}
+window.addEventListener("pointermove", onEggDragMove);
+window.addEventListener("pointerup", endEggDrag);
+</script>
+
+</body>
+</html>
