@@ -1254,7 +1254,7 @@ const PROCESS_LABELS = {
 const DOCK_SCALE = 0.25; // same scale as the adult bird's own birdRoot
 const DOCK_SCALE_STAGE4 = 0.418; // birdout_bird.png (217x235) scaled to match adult body_0.png (314x393) @ 0.25 visual height
 const DOCK_TOP_PCT = "88%"; // matches IDLE_POS.y, where the adult bird stands
-const DOCK_UP_SHIFT_PX = { egg0: 40, egg1: 30, egg2: 30, egg3:50, egg4: 20 };
+const DOCK_UP_SHIFT_PX = { egg0: 40, egg1: 30, egg2: 30, egg3:50, egg4: 20, adult: 70 };
 const DOCK_IDS = { egg0: "dock0", egg1: "dock1", egg2: "dock2", egg3: "dock3", egg4: "dock4" };
 
 let processMode = false;
@@ -1269,6 +1269,25 @@ function setDocked(stageKey, on){
   const scale = stageKey === "egg4" ? DOCK_SCALE_STAGE4 : DOCK_SCALE;
   const shift = DOCK_UP_SHIFT_PX[stageKey] || 0;
   el.style.transform = `translateY(-${shift}px) scale(${scale})`;
+}
+
+// The adult bird isn't docked (no wrapper div — it already stands at IDLE_POS),
+// so its own entry in DOCK_UP_SHIFT_PX is applied directly to its resting
+// position instead: without this it can land close enough to the top-left
+// edge of the screen to clip out of frame, so this shift is required, not
+// cosmetic.
+function applyAdultDockShift(on){
+  if (on){
+    // Arriving at the adult stage always snaps it to the docking position —
+    // never leave it wherever a stray/interrupted flight left it.
+    isFlying = false;
+    rootEl.style.transition = "none";
+  } else if (isFlying){
+    return; // don't fight an active flight when leaving the stage
+  }
+  const shift = on ? (DOCK_UP_SHIFT_PX.adult || 0) : 0;
+  rootEl.style.left = (window.innerWidth * IDLE_POS.x - BIRD_HALF) + "px";
+  rootEl.style.top  = (window.innerHeight * IDLE_POS.y - BIRD_HALF - shift) + "px";
 }
 
 function setPerStageHudVisible(visible){
@@ -1296,6 +1315,7 @@ function exitAllProcess(){
   document.getElementById("btnAllProcess").style.fontWeight = "normal";
   hideGlow();
   PROCESS_STAGES.forEach(s => setDocked(s, false));
+  applyAdultDockShift(false);
   setPerStageHudVisible(true);
 }
 
@@ -1303,6 +1323,7 @@ function showProcessStage(i){
   processIndex = Math.max(0, Math.min(PROCESS_STAGES.length - 1, i));
   const key = PROCESS_STAGES[processIndex];
   showStage(key);
+  applyAdultDockShift(key === "adult");
   if (key === "adult") document.getElementById("stagePlatform").style.opacity = "1";
   document.getElementById("processStageLabel").textContent =
     `${processIndex + 1}/${PROCESS_STAGES.length} — ${PROCESS_LABELS[key]}`;
